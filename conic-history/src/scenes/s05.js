@@ -40,7 +40,7 @@ ANIM.scene({
   id: 's05', title: '원뿔 속에 숨겨진 곡선들',
   start: ANIM.TIMES.s05[0], end: ANIM.TIMES.s05[1],
   mood: 'rise',
-  fadeIn: 0.9, fadeOut: 0.9,
+  fadeIn: 0, fadeOut: 0.9,
 
   init(api, S) {
     const { u, W, H } = api; const P = ANIM.paint; const DEG = Math.PI / 180; const E = u.ease;

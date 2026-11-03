@@ -84,7 +84,7 @@
     ctx.save(); ctx.globalAlpha *= alpha; ctx.fillStyle = color; ctx.beginPath();
     ctx.moveTo(L[0].x, L[0].y); for (let i = 1; i < n; i++) ctx.lineTo(L[i].x, L[i].y);
     for (let i = n - 1; i >= 0; i--) ctx.lineTo(R[i].x, R[i].y); ctx.closePath(); ctx.fill();
-    if (cap && !closed) { const r0 = u.dist(L[0], R[0]) / 2, r1 = u.dist(L[n - 1], R[n - 1]) / 2; ctx.beginPath(); ctx.arc(P[0].x, P[0].y, r0, 0, TAU); ctx.arc(P[n - 1].x, P[n - 1].y, r1, 0, TAU); ctx.fill(); }
+    if (cap && !closed) { const r0 = u.dist(L[0], R[0]) / 2, r1 = u.dist(L[n - 1], R[n - 1]) / 2; ctx.beginPath(); ctx.arc(P[0].x, P[0].y, r0, 0, TAU); ctx.closePath(); ctx.moveTo(P[n - 1].x + r1, P[n - 1].y); ctx.arc(P[n - 1].x, P[n - 1].y, r1, 0, TAU); ctx.closePath(); ctx.fill(); }
     ctx.restore();
   };
   // several thin passes = pencil / sketch feel
@@ -282,7 +282,7 @@
         c.save(); c.globalAlpha = a * 0.55; c.fillStyle = '#05070d'; roundRect(c, W / 2 - w / 2, y - 40, w, 80 + (lines.length - 1) * lh, 12); c.fill(); c.restore();
         lines.forEach((l, i) => u.text(c, l, W / 2, y + i * lh, { size, weight: 600, color: '#f6f1e6', alpha: a, glow: 0 }));
       } else if (who === 'o') {
-        const y = H - 215; u.text(c, s.text, W / 2 + 2, y + 3, { size: 54, font: 'serif', weight: 700, color: '#000', alpha: a * 0.6, spacing: 3 });
+        const y = 150; { const g = c.createRadialGradient(W / 2, y, 40, W / 2, y, 760); g.addColorStop(0, 'rgba(8,10,22,0.55)'); g.addColorStop(1, 'rgba(8,10,22,0)'); c.save(); c.globalAlpha = a; c.translate(W / 2, y); c.scale(1, 0.16); c.translate(-W / 2, -y); c.fillStyle = g; c.fillRect(0, y - 760, W, 1520); c.restore(); } u.text(c, s.text, W / 2 + 2, y + 3, { size: 54, font: 'serif', weight: 700, color: '#000', alpha: a * 0.6, spacing: 3 });
         u.text(c, s.text, W / 2, y, { size: 54, font: 'serif', weight: 700, color: '#f6d784', alpha: a, glow: 28, glowColor: '#ffb640', spacing: 3 });
       } else if (who === 'c') {
         const size = 26; const w = u.textW(c, s.text, size, 'sans', 400) + 36; const y = H - 36;

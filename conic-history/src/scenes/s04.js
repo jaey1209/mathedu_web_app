@@ -52,7 +52,7 @@ ANIM.scene({
   id: 's04', title: '메나이크모스의 새로운 발상',
   start: ANIM.TIMES.s04[0], end: ANIM.TIMES.s04[1],
   mood: t => (t < 30 ? 'ancient' : 'rise'),
-  fadeIn: 0.9, fadeOut: 0.3,
+  fadeIn: 0.9, fadeOut: 0,
 
   init(api, S) {
     const { u, W, H } = api; const P = ANIM.paint;

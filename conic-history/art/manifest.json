@@ -1,0 +1,99 @@
+{
+ "exportDesign": "DAHZ3vqS3ik",
+ "exportElement": "PBBLGcLjXC3SvZm8-LBBYB3V5TYR3XQlP",
+ "exportPage": "PBBLGcLjXC3SvZm8",
+ "plates": {
+  "A01": {
+   "media": "MAHZ36nsdn0",
+   "desc": "델로스 새벽 전경",
+   "page": "PBBLGcLjXC3SvZm8",
+   "element": "LBBYB3V5TYR3XQlP",
+   "pageIndex": 1
+  },
+  "A02": {
+   "media": "MAHZ3wPPKEw",
+   "desc": "신전으로 오르는 행렬",
+   "page": "PBdqJXQ3C5pZhTtB",
+   "element": "LBHYq0t2ZcZYqq2L",
+   "pageIndex": 2
+  },
+  "A03": {
+   "media": "MAHZ33rldn8",
+   "desc": "신전 내부, 빛 받는 정육면체 제단",
+   "page": "PBDJ0JtnLw7SyWqb",
+   "element": "LB6SngjNh99fkfl0",
+   "pageIndex": 3
+  },
+  "B01": {
+   "media": "MAHZ312GJ3g",
+   "desc": "석공 작업장",
+   "page": "PBRKFSFDVDHgsZsV",
+   "element": "LBCYSM5XcxSl7mNk",
+   "pageIndex": 5
+  },
+  "D01": {
+   "media": "MAHZ35cDWlo",
+   "desc": "메나이크모스의 서재",
+   "page": "PBK4ZvtRQStybqjy",
+   "element": "LB6Nw5kPHp0Nc7jW",
+   "pageIndex": 8
+  },
+  "A04": {
+   "media": "MAHZ36BJDYQ",
+   "desc": "정육면체 제단 클로즈업",
+   "page": "PBQJQdZTV5GCkrxG",
+   "element": "LBt4r3NSynTwvdZg",
+   "pageIndex": 4
+  },
+  "B02": {
+   "media": "MAHZ3-wS7Bk",
+   "desc": "줄자로 모서리를 재는 손",
+   "page": "PBymbqWB90RMcyTZ",
+   "element": "LB97jvCsBHF760ZB",
+   "pageIndex": 6
+  },
+  "C01": {
+   "media": "MAHZ357erYw",
+   "desc": "스토아의 수학자들과 모래판",
+   "page": "PBrb0ZhTkCH9gGYH",
+   "element": "LBwXQJm5DFdjPh6f",
+   "pageIndex": 7
+  },
+  "D02": {
+   "media": "MAHZ32ENRUI",
+   "desc": "등잔불 아래 원뿔을 든 손",
+   "page": "PBQZMsQ7h1l82Df3",
+   "element": "LB2PqB6KW1g74VPr",
+   "pageIndex": 9
+  },
+  "D03": {
+   "media": "MAHZ31RUPRU",
+   "desc": "창가에서 별을 보는 메나이크모스",
+   "page": "PBDQblkb5gfMY0wC",
+   "element": "LBx7X205J5KJ8p2H",
+   "pageIndex": 10
+  },
+  "G01": {
+   "media": "MAHZ39YHaHM",
+   "desc": "두루마리 서가와 원뿔 도형",
+   "page": "PBDz46jDCHt2Rj1P",
+   "element": "LBWb6gWdX5lbvrvN",
+   "pageIndex": 11
+  },
+  "G02": {
+   "media": "MAHZ39pk-LA",
+   "desc": "아폴로니오스",
+   "page": "PBWZ847TLNCRfmcf",
+   "element": "LBHX7F7J1TJ6R3R4",
+   "pageIndex": 12
+  },
+  "P01": {
+   "media": "MAHZ35vIHMo",
+   "desc": "제목 카드: 빛나는 원뿔과 창밖 바다",
+   "page": "PB3Bz9CZ7RphFZ61",
+   "element": "LB0v5PXKGh8fXDPK",
+   "pageIndex": 13
+  }
+ },
+ "note": "전체 해상도: export-design(design DAHZ3vqS3ik, type jpg, pages [pageIndex], width 1920, height 1080) → URL(export-download.canva.com) 다운로드 → art/plates/<ID>.jpg"
+}

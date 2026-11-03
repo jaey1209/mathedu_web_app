@@ -7,31 +7,39 @@
    engine). All effect positions are image-fraction coordinates via u.platePt.
 
    Timing map (scene-local seconds == global seconds):
-     0.0– 9.6  A01 Delos dawn panorama, zoom 1.00→1.12 toward the temple
-     8.6– 9.6    dissolve A01→A02 (1.0 s)
-     9.0–17.6  A02 procession, pan-up along the path, zoom 1.18→1.06
-    16.4–17.6    dissolve A02→A03 (1.2 s)
-    17.0–31.7  A03 temple interior, zoom 1.00→1.13 on the altar
+     0.0– 9.6  A01 Delos dawn panorama, zoom 1.00→1.15 drifting toward the temple
+     8.6– 9.6    dissolve A01→A02 (1.0 s, inside the subtitle gap 8.8–10.0)
+     9.0–17.9  A02 procession, true pan-up along the path, zoom 1.22→1.16
+    15.9–17.2    A02 darkens to ~40 % (entering the temple = going into shadow)
+    17.0–17.8    dissolve A02→A03 (0.8 s, inside the silent gap 16.8–19.5)
+    17.0–31.7  A03 temple interior, zoom 1.04→1.16 on the altar
     19.5–30.6    oracle: shaft/altar light pulses, rising dust (mood 'oracle' from 18)
-    30.6–31.8    gold flare + dissolve A03→A04
-    31.0–40.0  A04 altar close-up, gold bloom rises 31–33.5 then breathes, zoom 1.00→1.12
+    30.6–31.9    gold swell (peak 31.15) + dissolve A03→A04
+    31.0–40.0  A04 altar close-up, gold bloom rises 31–33.5 then breathes, zoom 1.04→1.14
+
+   Camera rule: for a 16:9 plate the reachable focus range at zoom z is
+   fx,fy ∈ [0.5/z, 1-0.5/z]; every u.kb endpoint below stays inside it, and
+   kbSafe() clamps the interpolated focus (a no-op for these paths) so the
+   engine's pixel clamp never turns an eased pan into a slide/stop.
 
    Performance note: large radial glows are pre-rendered ONCE in init() into
-   transparent layers (sun, altar pool, bloom, flare) and composited with a
-   single drawImage per frame; only small glows (torches, censers) are live.
+   transparent layers (sun, altar pool, bloom, flare — the two full-frame ones
+   at half resolution) and composited with a single drawImage per frame; only
+   small glows (torches, censers) are live. No per-frame blend-mode grade
+   except the short A02 shadow ramp (15.9–17.9).
    ========================================================================== */
 ANIM.scene({
   id: 's01', title: '신탁이 내려오다',
   start: ANIM.TIMES.s01[0], end: ANIM.TIMES.s01[1],
   mood: t => (t < 18 ? 'ancient' : 'oracle'),
-  fadeIn: 0.9, fadeOut: 0.9,
+  fadeIn: 0.9, fadeOut: 0.5,
 
   init(api, S) {
     const { u, W, H } = api; const P = ANIM.paint;
     S.beats = [
       { id: 'A01', t0: 0.0, t1: 9.6, fade: 1.0 },
-      { id: 'A02', t0: 8.6, t1: 17.6, fade: 1.0 },
-      { id: 'A03', t0: 16.4, t1: 31.7, fade: 1.2 },
+      { id: 'A02', t0: 8.6, t1: 17.9, fade: 1.0 },
+      { id: 'A03', t0: 17.0, t1: 31.7, fade: 0.8 },
       { id: 'A04', t0: 30.6, t1: 40.0, fade: 1.1 },
     ];
     S.has = {
@@ -40,88 +48,113 @@ ANIM.scene({
     };
     // --- pre-rendered glow layers (sizes in plate-units at zoom 1, i.e. R.w = 1920) ---
     // sun (A01/A02): centred 800x800
-    S.sunL = u.layer(800, 800, c => { u.glow(c, 400, 400, 370, '#ffd98a', 0.24); u.glow(c, 400, 400, 130, '#fff0c0', 0.3); });
+    S.sunL = u.layer(800, 800, c => { u.glow(c, 400, 400, 370, '#ffd98a', 0.34); u.glow(c, 400, 400, 150, '#fff6d8', 0.5); });
     S.sunL.cx = 400; S.sunL.cy = 400;
-    // altar pool (A03): altar point at (600,450); pool above, wide floor glow below
-    S.altarL = u.layer(1000, 980, c => { u.glow(c, 500, 410, 310, '#ffd98a', 1.0); u.glow(c, 500, 480, 480, '#ffb640', 0.5); });
-    S.altarL.cx = 500; S.altarL.cy = 430;
-    // bloom (A04): full frame, cube centre at (960,594) for zoom 1 — overall light only, no edge lines
-    S.bloomL = u.layer(W, H, c => {
-      c.fillStyle = u.alpha('#f3d27a', 0.05); c.fillRect(0, 0, W, H);               // faint warm wash
-      u.glow(c, 960, 594, 860, '#f3d27a', 0.14); u.glow(c, 960, 594, 480, '#f6dc8a', 0.23);
-      u.glow(c, 960, 486, 150, '#fff3c4', 0.14); u.glow(c, 960, 920, 960, '#f3d27a', 0.08);
+    // altar pool (A03): anchor = cube top face at (700,460); hot spot on the top face,
+    // wide floor spill below, and a very broad faint warmth that replaces the old
+    // per-frame soft-light grade (so the room warms with the heartbeat for free)
+    S.altarL = u.layer(1400, 1100, c => {
+      u.glow(c, 700, 500, 700, '#ffd27a', 0.22);
+      u.glow(c, 700, 440, 310, '#ffd98a', 0.7);
+      u.glow(c, 700, 530, 480, '#ffb640', 0.4);
     });
-    // flare at the end of the oracle: full frame
-    S.flareL = u.layer(W, H, c => { u.glow(c, 960, 594, 1134, '#fff0c4', 0.85); u.glow(c, 960, 594, 486, '#ffffff', 0.5); });
+    S.altarL.cx = 700; S.altarL.cy = 460;
+    // bloom (A04): full frame at HALF resolution, cube centre at (960,594) for zoom 1
+    // — overall light only, no edge lines, no full-frame wash (keeps the blacks)
+    S.bloomL = u.layer(W / 2, H / 2, c => {
+      c.scale(0.5, 0.5);
+      u.glow(c, 960, 594, 860, '#f3d27a', 0.10); u.glow(c, 960, 594, 480, '#f6dc8a', 0.18);
+      u.glow(c, 960, 486, 150, '#fff3c4', 0.14); u.glow(c, 960, 920, 960, '#f3d27a', 0.06);
+    });
+    // gold swell at the end of the oracle: full frame at HALF resolution, warm gold (never white)
+    S.flareL = u.layer(W / 2, H / 2, c => { c.scale(0.5, 0.5); u.glow(c, 960, 594, 1134, '#ffd98a', 0.55); u.glow(c, 960, 594, 486, '#fff1cc', 0.3); });
   },
 
   draw(api, t, S) {
     const { ctx: c, u, W, H } = api; const P = ANIM.paint;
 
     /* ---------------------------------------------------------- helpers */
-    // oracle pulse (19.5–30.6): slow heartbeat 0..1, eased in; keeps rising into the flare
+    // oracle pulse (19.5–30.6): slow heartbeat 0..1, eased in; keeps rising into the swell
     const oracleEnv = u.smooth(19.5, 21.0, t) * (1 - u.smooth(31.4, 32.0, t));
     const beat = 0.5 + 0.5 * Math.sin((t - 19.5) * Math.PI * 2 * 0.42 - Math.PI / 2);
     const pulse = oracleEnv * (0.35 + 0.65 * beat);
-    // flare at the end of the oracle (30.6 → peak 31.1 → gone 31.8)
-    const flare = u.smooth(30.6, 31.1, t) * (1 - u.smooth(31.1, 31.8, t));
+    // gold swell at the end of the oracle (30.6 → peak 31.15 → gone 31.9)
+    const flare = u.smooth(30.6, 31.15, t) * (1 - u.smooth(31.15, 31.9, t));
     const breathe = (speed, seed) => 0.85 + 0.15 * u.noise2(t * speed + seed * 5.3, seed);
+    // Ken Burns whose focus always stays inside the reachable range of u.plate (see header)
+    const kbSafe = (t0, t1, a, b) => {
+      const k = u.kb(t, t0, t1, a, b); const m = 0.5 - 0.5 / k.zoom;
+      k.fx = u.clamp(k.fx, 0.5 - m, 0.5 + m); k.fy = u.clamp(k.fy, 0.5 - m, 0.5 + m); return k;
+    };
     // draw a cached glow layer centred on (x,y), scaled by s, with alpha
     const layerAt = (L, x, y, s, alpha, cx = L.cx || L.width / 2, cy = L.cy || L.height / 2) => {
       if (alpha <= 0.002) return; c.save(); c.globalAlpha *= alpha; c.drawImage(L, x - cx * s, y - cy * s, L.width * s, L.height * s); c.restore();
     };
+    // full-frame half-res layer
+    const fullAt = (L, alpha) => { if (alpha <= 0.002) return; c.save(); c.globalAlpha *= alpha; c.drawImage(L, 0, 0, W, H); c.restore(); };
 
     /* ----------------------------------------------------------- beats */
     function A01(a) {
-      const kb = u.kb(t, 0, 9.6, { zoom: 1.0, fx: 0.5, fy: 0.52 }, { zoom: 1.12, fx: 0.6, fy: 0.5 });
+      // range at 1.15: ±0.065 → fx 0.56 / fy 0.52 OK
+      const kb = kbSafe(0, 9.6, { zoom: 1.0, fx: 0.5, fy: 0.5 }, { zoom: 1.15, fx: 0.56, fy: 0.52 });
       const R = u.plate(c, 'A01', Object.assign(kb, { alpha: a })); if (!R) return;
       const sz = R.w / W;
       c.save(); c.globalAlpha = a;
-      // 1. low dawn sun breathing at the horizon (left)
-      const sun = u.platePt(R, 0.07, 0.6); const br = breathe(0.5, 3);
-      layerAt(S.sunL, sun.x, sun.y, sz * br, br);
+      // 1. low dawn sun breathing just above the left ridge (the plate's brightest sky)
+      const sun = u.platePt(R, 0.065, 0.685); const br = breathe(0.5, 3);
+      layerAt(S.sunL, sun.x, sun.y, sz * br, Math.min(1, 1.3 * br));
       // 2. sun path sparkling on the sea
       const hz = u.platePt(R, 0, 0.775).y;
       if (S.has.sparkle) P.seaSparkle(c, t, { horizonY: hz, bottom: R.y + R.h + 10, seed: 5, count: 55, x: u.platePt(R, 0.16, 0).x, spread: 0.42 * R.w, alpha: 0.7, color: '#fff0c0' });
-      // 3. gulls over the bay
-      if (S.has.birds) P.birds(c, t, { count: 4, seed: 11, box: [R.x + R.w * 0.06, R.y + R.h * 0.4, R.w * 0.42, R.h * 0.22], scale: 1.15 * sz, color: '#3a3350', speed: 0.7, alpha: 0.7 });
+      // 3. three gulls in the open sky left of the cumulus (big enough to read as birds)
+      if (S.has.birds) P.birds(c, t, { count: 3, seed: 11, box: [R.x + R.w * 0.04, R.y + R.h * 0.42, R.w * 0.26, R.h * 0.18], scale: 2.0 * sz, color: '#3a3350', speed: 0.6, alpha: 0.7 });
       c.restore();
     }
 
     function A02(a) {
-      const kb = u.kb(t, 9, 17.6, { zoom: 1.18, fx: 0.42, fy: 0.72 }, { zoom: 1.06, fx: 0.55, fy: 0.42 });
+      // true pan-up along the path: range at 1.22 is ±0.090 (0.47/0.58 OK), at 1.16 ±0.069 (0.52/0.44 OK)
+      const kb = kbSafe(9, 17.9, { zoom: 1.22, fx: 0.47, fy: 0.58 }, { zoom: 1.16, fx: 0.52, fy: 0.44 });
       const R = u.plate(c, 'A02', Object.assign(kb, { alpha: a })); if (!R) return;
       const sz = R.w / W;
       c.save(); c.globalAlpha = a;
       // 1. low sun over the sea (breathing)
-      const sun = u.platePt(R, 0.13, 0.33); const br = breathe(0.45, 7);
-      layerAt(S.sunL, sun.x, sun.y, sz * 0.8 * br, br);
-      // 2. torches: boiling flames + thin smoke, at the painted torch heads
-      const torches = [[0.437, 0.335, 1.0, 21], [0.537, 0.30, 0.9, 22], [0.65, 0.36, 0.95, 23]];
+      const sun = u.platePt(R, 0.133, 0.37); const br = breathe(0.45, 7);
+      layerAt(S.sunL, sun.x, sun.y, sz * 0.8 * br, 0.8 * br);
+      // 2. torches: boiling flames + thin smoke, exactly on the painted flame heads
+      //    (fx, fy = base of the painted flame; k = size factor; seed)
+      const torches = [[0.421, 0.452, 0.85, 21], [0.533, 0.352, 0.95, 22], [0.646, 0.376, 0.9, 23]];
       torches.forEach(([fx, fy, k, seed]) => {
         const p = u.platePt(R, fx, fy);
-        if (S.has.smoke) P.smoke(c, t, { x: p.x, y: p.y - 18 * sz, seed, scale: 0.55 * sz * k, alpha: 0.28, color: '#cfc3bc', count: 7, rise: 0.22 * R.h, wind: 0.25 });
-        u.glow(c, p.x, p.y - 10 * sz, 0.07 * R.h * k * breathe(6, seed), '#ffb640', 0.3);
-        if (S.has.flame) P.flame(c, t, { x: p.x, y: p.y + 2 * sz, scale: 0.95 * sz * k, seed, alpha: 0.95 });
+        if (S.has.smoke) P.smoke(c, t, { x: p.x, y: p.y - 22 * sz, seed, scale: 0.55 * sz * k, alpha: 0.28, color: '#cfc3bc', count: 7, rise: 0.22 * R.h, wind: 0.25 });
+        u.glow(c, p.x, p.y - 12 * sz, 0.07 * R.h * k * breathe(6, seed), '#ffb640', 0.3);
+        if (S.has.flame) P.flame(c, t, { x: p.x, y: p.y + 2 * sz, scale: 1.05 * sz * k, seed, alpha: 0.95 });
       });
-      // 3. two distant gulls over the sea (left)
-      if (S.has.birds) P.birds(c, t, { count: 2, seed: 13, box: [R.x + R.w * 0.02, R.y + R.h * 0.22, R.w * 0.28, R.h * 0.14], scale: 0.8 * sz, color: '#4a4058', speed: 0.6, alpha: 0.55 });
+      // 3. entering the temple = going into shadow: the exterior darkens before the
+      //    interior dissolves in, so the light shaft rises out of darkness, not over faces
+      //    (multiply 0.7 of deep navy ≈ 40 % brightness by 17.2, so the ghost under the
+      //    incoming interior is weak and the subtitle gap 16.8–19.5 carries the switch)
+      const dk = 0.7 * u.smooth(15.9, 17.2, t);
+      if (dk > 0.002) u.grade(c, '#1b2447', dk, 'multiply');
       c.restore();
     }
 
     function A03(a) {
-      const kb = u.kb(t, 17, 31.7, { zoom: 1.0, fx: 0.5, fy: 0.55 }, { zoom: 1.13, fx: 0.5, fy: 0.62 });
+      // range at 1.04 is ±0.019 (fy 0.519 OK), at 1.16 ±0.069 (fy 0.565 OK): the altar rises gently
+      const kb = kbSafe(17.0, 31.7, { zoom: 1.04, fx: 0.5, fy: 0.519 }, { zoom: 1.16, fx: 0.5, fy: 0.565 });
       const R = u.plate(c, 'A03', Object.assign(kb, { alpha: a })); if (!R) return;
       const sz = R.w / W; const lightK = 1 + 0.6 * pulse + 1.2 * flare;
       c.save(); c.globalAlpha = a;
       // 1. breathing light shaft from the oculus to the altar (additive, over the painted one)
-      const top = u.platePt(R, 0.5, -0.02), alt = u.platePt(R, 0.5, 0.74);
+      const top = u.platePt(R, 0.5, -0.02), alt = u.platePt(R, 0.5, 0.74), pool = u.platePt(R, 0.5, 0.775);
       u.shaft(c, t, top.x, top.y, alt.x, alt.y, 0.035 * R.w, 0.11 * R.w, '#ffe3a0', 0.12 * lightK, 2);
       u.shaft(c, t, top.x, top.y, alt.x, alt.y + 0.03 * R.h, 0.015 * R.w, 0.05 * R.w, '#fff2cc', 0.1 * lightK, 5);
-      // altar pool + floor glow pulsing with the oracle (one cached layer)
-      layerAt(S.altarL, alt.x, alt.y, sz * (0.92 + 0.08 * pulse), (0.18 + 0.22 * pulse) * (1 + 0.8 * flare));
-      // 2. dust motes rising inside the shaft (more visible as the oracle speaks)
-      u.motes(c, t, { count: 70, box: [alt.x - 0.12 * R.w, R.y, 0.24 * R.w, alt.y - R.y + 0.02 * R.h], seed: 9, color: '#ffe9b0', size: 2.4 * sz, speed: 0.55, alpha: 0.28 + 0.3 * pulse, drift: 0.8 });
+      // altar pool + floor spill + broad warmth, pulsing with the oracle (one cached layer,
+      // hottest spot anchored on the cube's top face; kept soft so the marble keeps its edges)
+      layerAt(S.altarL, pool.x, pool.y, sz * (0.92 + 0.08 * pulse), (0.12 + 0.15 * pulse) * (1 + 0.8 * flare));
+      // 2. dust motes rising INSIDE the shaft cone (three stacked boxes that widen downward)
+      const mA = 0.28 + 0.3 * pulse, L = alt.y - top.y;
+      const cone = [[0.00, 0.35, 0.045, 14], [0.35, 0.70, 0.085, 24], [0.70, 1.02, 0.125, 34]];
+      cone.forEach(([s0, s1, hw, n], i) => u.motes(c, t, { count: n, box: [alt.x - hw * R.w, top.y + s0 * L, 2 * hw * R.w, (s1 - s0) * L], seed: 9 + i, color: '#ffe9b0', size: 2.4 * sz, speed: 0.55, alpha: mA, drift: 0.8 }));
       // 3. censer smoke (left & right tripods) + ember glow in the bowls
       const cen = [[0.14, 0.635, 41], [0.858, 0.70, 42]];
       cen.forEach(([fx, fy, seed]) => {
@@ -129,13 +162,12 @@ ANIM.scene({
         if (S.has.smoke) P.smoke(c, t, { x: p.x, y: p.y, seed, scale: 0.95 * sz, alpha: 0.32, color: '#d9d2cc', count: 10, rise: 0.42 * R.h, wind: 0.12 });
         u.glow(c, p.x, p.y, 0.045 * R.w * breathe(5, seed), '#ffb640', 0.22);
       });
-      // oracle: the whole frame warms and brightens on the heartbeat
-      if (pulse > 0.02) u.grade(c, '#ffd27a', 0.09 * pulse, 'soft-light');
       c.restore();
     }
 
     function A04(a) {
-      const kb = u.kb(t, 31, 40, { zoom: 1.0, fx: 0.5, fy: 0.55 }, { zoom: 1.12, fx: 0.5, fy: 0.55 });
+      // range at 1.04 is ±0.019 (fy 0.519 OK), at 1.14 ±0.061 (fy 0.555 OK)
+      const kb = kbSafe(31, 40, { zoom: 1.04, fx: 0.5, fy: 0.519 }, { zoom: 1.14, fx: 0.5, fy: 0.555 });
       const R = u.plate(c, 'A04', Object.assign(kb, { alpha: a })); if (!R) return;
       const sz = R.w / W;
       const e = u.smooth(31, 33.5, t);                       // gold rising
@@ -144,10 +176,11 @@ ANIM.scene({
       // 1. light from above breathing
       const top = u.platePt(R, 0.5, -0.05), cube = u.platePt(R, 0.5, 0.55);
       u.shaft(c, t, top.x, top.y, cube.x, cube.y - 0.12 * R.h, 0.05 * R.w, 0.16 * R.w, '#ffe3a0', 0.1 + 0.06 * e, 8);
-      // 2. golden bloom on the altar (overall light only — no glowing edge lines)
-      layerAt(S.bloomL, cube.x, cube.y, sz, e * br, 960, 594);
-      // 3. rising glints & dust around the altar
-      if (S.has.particles) P.particles(c, t, { kind: 'glint', count: 16, box: [cube.x - 0.22 * R.w, cube.y - 0.35 * R.h, 0.44 * R.w, 0.6 * R.h], seed: 61, size: 1.1 * sz, speed: 0.8, alpha: 0.65 * e });
+      // 2. golden bloom on the altar (overall light only — no glowing edge lines; capped at 0.85
+      //    so the marble top face never blows out)
+      layerAt(S.bloomL, cube.x, cube.y, sz * 2, 0.85 * e * br, 480, 297);
+      // 3. slow dust drifting in the light around the altar
+      if (S.has.particles) P.particles(c, t, { kind: 'dust', count: 14, box: [cube.x - 0.22 * R.w, cube.y - 0.35 * R.h, 0.44 * R.w, 0.6 * R.h], seed: 61, size: 1.0 * sz, speed: 0.8, alpha: 0.6 * e });
       u.motes(c, t, { count: 50, box: [cube.x - 0.3 * R.w, cube.y - 0.45 * R.h, 0.6 * R.w, 0.8 * R.h], seed: 63, color: '#ffe9b0', size: 2.6 * sz, speed: 0.7, alpha: 0.4 * e, drift: 0.9 });
       c.restore();
     }
@@ -165,7 +198,8 @@ ANIM.scene({
     }
     if (!drawn) { c.fillStyle = '#101a33'; c.fillRect(0, 0, W, H); }
 
-    /* --------------------------------------------- oracle-end gold flare */
-    if (flare > 0.002) { c.save(); c.globalAlpha = flare; c.drawImage(S.flareL, 0, 0); c.restore(); }
+    /* ---------------------------------------- oracle-end golden swell */
+    // warm gold, capped at 0.7 so the altar and priests stay visible through the light
+    fullAt(S.flareL, 0.7 * flare);
   },
 });

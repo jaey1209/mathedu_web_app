@@ -62,8 +62,8 @@ ANIM.scene({
     // apex at origin, opening toward -y. hUp>0 = upper nappe (double cone)
     S.cones = [
       { id: 0, name: '예각 원뿔', ang: '꼭지각 60°', alpha: 30 * DEG, h: 2.25, hUp: 0, fovBeat: 1500 },
-      { id: 1, name: '직각 원뿔', ang: '꼭지각 90°', alpha: 45 * DEG, h: 1.63, hUp: 0, fovBeat: 1400 },
-      { id: 2, name: '둔각 원뿔', ang: '꼭지각 120°', alpha: 60 * DEG, h: 1.25, hUp: 1.25, fovBeat: 1250 },
+      { id: 1, name: '직각 원뿔', ang: '꼭지각 90°', alpha: 45 * DEG, h: 2.0, hUp: 0, fovBeat: 1350 },
+      { id: 2, name: '둔각 원뿔', ang: '꼭지각 120°', alpha: 60 * DEG, h: 1.1, hUp: 1.5, fovBeat: 1100 },
     ];
     S.s04cone = { alpha: 0.46, h: 2.6, hUp: 0 };        // the cone that rose at the end of S04
 
@@ -74,8 +74,8 @@ ANIM.scene({
     S.facingBasis = (yaw, pitch) => { const xr = [Math.cos(yaw), 0, -Math.sin(yaw)]; const yu = [-Math.sin(pitch) * Math.sin(yaw), Math.cos(pitch), -Math.sin(pitch) * Math.cos(yaw)]; return { xr, yu, N: V.cross(xr, yu) }; };
     S.beats = [
       { id: 'ellipse', cone: 0, t0: 10, name: '타원', desc: '닫힌 곡선', yp: -0.95, orient: 'ex', type: 'ellipse' },
-      { id: 'parabola', cone: 1, t0: 19, name: '포물선', desc: '한 방향으로 무한히 뻗는 곡선', yp: -0.75, orient: 'ey', type: 'parabola' },
-      { id: 'hyperbola', cone: 2, t0: 28, name: '쌍곡선', desc: '서로 분리된 두 갈래', yp: -0.42, orient: 'ex', type: 'hyperbola', double: true },
+      { id: 'parabola', cone: 1, t0: 19, name: '포물선', desc: '한 방향으로 무한히 뻗는 곡선', yp: -0.45, orient: 'ey', type: 'parabola' },
+      { id: 'hyperbola', cone: 2, t0: 28, name: '쌍곡선', desc: '서로 분리된 두 갈래', yp: -0.4, orient: 'ey', type: 'hyperbola', double: true },
     ];
     for (const b of S.beats) {
       const K = S.cones[b.cone]; const al = K.alpha; b.t1 = b.t0 + 9;
@@ -88,7 +88,9 @@ ANIM.scene({
       b.plane = { p, nrm: g };                                                                     // plane ⟂ generator through p
       b.typeCheck = u.conicType(al, g);
       if (b.typeCheck !== b.type) console.warn('S05: conic type mismatch', b.id, b.typeCheck);
-      b.branches = u.coneSection({ alpha: al, h: Math.max(K.h, K.hUp), double: !!b.double, plane: b.plane, n: 360 });
+      // exact section; each nappe is then clipped at its own height (lower: y ≥ −h, upper: y ≤ hUp), splitting where points drop out
+      const raw = u.coneSection({ alpha: al, h: Math.max(K.h, K.hUp), double: !!b.double, plane: b.plane, n: 360 });
+      b.branches = []; raw.forEach(br => { let cur = []; br.forEach(q => { if (q.y >= -K.h - 1e-9 && q.y <= K.hUp + 1e-9) cur.push(q); else if (cur.length) { b.branches.push(cur); cur = []; } }); if (cur.length) b.branches.push(cur); }); b.branches = b.branches.filter(br => br.length > 1);
       // in-plane axis direction (lies in the axial plane, ⟂ g), pointing from p INTO the cone (downward)
       const d = [-Math.cos(al) * Math.cos(th), -Math.sin(al), -Math.cos(al) * Math.sin(th)];
       b.d = d;
@@ -104,7 +106,7 @@ ANIM.scene({
       if (V.dot(N, F.N) < 0) { N = V.scale(N, -1); if (b.orient === 'ex') { uy = V.scale(uy, -1); pts = pts.map(br => br.map(q => ({ x: q.x, y: -q.y }))); } else { ux = V.scale(ux, -1); pts = pts.map(br => br.map(q => ({ x: -q.x, y: q.y }))); } }
       // bounding box → panel rectangle; local coords relative to the bbox centre
       let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9; pts.forEach(br => br.forEach(q => { x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y); }));
-      const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2; const pad = 0.28 + 0.1 * (x1 - x0 + y1 - y0) / 2;
+      const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2; const pad = 0.22 + 0.06 * (x1 - x0 + y1 - y0) / 2;
       b.loc = pts.map(br => br.map(q => ({ x: q.x - cx, y: q.y - cy })));
       b.hw = (x1 - x0) / 2 + pad; b.hh = (y1 - y0) / 2 + pad;
       b.C = V.add(V.add(b.p, ux, cx), uy, cy);                                    // 3D centre of the panel while attached
@@ -192,20 +194,20 @@ ANIM.scene({
       if (planeAlpha > 0.003) {
         const Q = [{ x: -b.hw, y: -b.hh }, { x: b.hw, y: -b.hh }, { x: b.hw, y: b.hh }, { x: -b.hw, y: b.hh }].map(map);
         c.save(); c.globalAlpha = alpha * planeAlpha;
-        c.fillStyle = u.alpha(GOLD, 0.11); u.polyPath(c, Q, true); c.fill();
-        c.globalCompositeOperation = 'lighter'; c.fillStyle = u.alpha(GOLD, 0.05); u.polyPath(c, Q, true); c.fill(); c.globalCompositeOperation = 'source-over';
+        c.fillStyle = u.alpha('#fff2c8', 0.07); u.polyPath(c, Q, true); c.fill();
+        c.globalCompositeOperation = 'lighter'; c.fillStyle = u.alpha('#ffe9a8', 0.045); u.polyPath(c, Q, true); c.fill(); c.globalCompositeOperation = 'source-over';
         u.ink(c, Q, { w: 2.4, color: GOLD2, alpha: 0.6, jitter: 0.8, seed: boil * 3 + b.t0 + 7, closed: true, taper: 0, step: 6 });
         c.restore();
       }
-      if (glow > 0) { const cc = map({ x: 0, y: 0 }); S.glow(c, cc.x, cc.y, Math.max(b.hw, b.hh) * 1.1 * (P.o.fov / (P.o.dist + 0)) * 0.55, GOLD, 0.16 * glow * alpha * breathe(1.2, 4)); }
+      if (glow > 0) { const cc = map({ x: 0, y: 0 }); S.glow(c, cc.x, cc.y, Math.max(b.hw, b.hh) * 1.1 * (P.o.fov / (P.o.dist + 0)) * 0.55, '#ffe9a8', 0.09 * glow * alpha * breathe(1.2, 4)); }
       // right-angle marker at the cut point p (plane ⟂ generator)
       if (marker > 0.003) {
-        const m = 0.13; const pl = b.pLoc; const back = V.scale(b.g, -m); // along the generator back toward the apex
+        const m = 0.2; const pl = b.pLoc; const back = V.scale(b.g, -m); // along the generator back toward the apex
         const ax = b.orient === 'ex' ? { x: m, y: 0 } : { x: 0, y: m };    // along the curve axis (in-plane direction d)
         const w0 = V.add(V.add(pose.C, pose.ux, pl.x), pose.uy, pl.y);
         const A = V.add(w0, back), B = V.add(V.add(V.add(w0, back), pose.ux, ax.x), pose.uy, ax.y), Cc = V.add(V.add(w0, pose.ux, ax.x), pose.uy, ax.y);
         const pts = [A, B, Cc].map(w => P(w[0], w[1], w[2]));
-        u.ink(c, pts, { w: 2.2, color: GOLD2, alpha: 0.9 * alpha * marker, jitter: 0.4, seed: boil * 3 + 31, taper: 0, step: 4 });
+        u.ink(c, pts, { w: 3.2, color: GOLD2, alpha: 0.95 * alpha * marker, jitter: 0.4, seed: boil * 3 + 31, taper: 0, step: 4 });
       }
       // section curve (branches), progressive, near/far split while attached to the cone
       if (curveAlpha > 0.003 && prog > 0.01) {
@@ -250,11 +252,11 @@ ANIM.scene({
       if (inBeat) continue;                                   // drawn by the beat block below (with plane/curve)
       const ty = -(K.h - K.hUp) / 2;
       const P = cam(cp.pose.cx, cp.pose.cy, cp.pose.fov, ty);
-      const r = drawCone(P, K, cp.alpha, { upAlpha: 1 });
+      const r = drawCone(P, K, cp.alpha, { upAlpha: 0 });   // the obtuse cone's upper nappe only appears when the hyperbola cut needs it
       if (r && kLab > 0 && t >= 5 && t < 9.4) {
         const a = kLab * cp.alpha; apexArc(r.co, a, i * 7);
-        u.text(c, K0.ang, r.co.apex2d.x, r.co.apex2d.y - 48, { size: 34, weight: 600, color: GOLD2, alpha: 0.95 * a, glow: 12, glowColor: '#d9a441' });
-        u.text(c, K0.name, cp.pose.cx, 770, { size: 44, font: 'serif', weight: 700, color: '#f6d784', alpha: a, glow: 18, glowColor: '#d9a441' });
+        u.text(c, K0.name, cp.pose.cx, 745, { size: 44, font: 'serif', weight: 700, color: '#f6d784', alpha: a, glow: 18, glowColor: '#d9a441' });
+        u.text(c, K0.ang, cp.pose.cx, 800, { size: 34, weight: 600, color: GOLD2, alpha: 0.95 * a, glow: 12, glowColor: '#d9a441' });
       }
     }
 
@@ -275,8 +277,9 @@ ANIM.scene({
       const kGen = E.out(u.seg(tau, 0.4, 1.0)); const genA = kGen * kFade * (1 - 0.6 * E.io(u.seg(tau, 3.8, 4.4)));
       if (kGen > 0) {
         const e = V.scale(b.g, b.genLen * kGen); const a2 = P(0, 0, 0), e2 = P(e[0], e[1], e[2]);
-        u.ink(c, [a2, e2], { w: 2.6, color: GOLD2, alpha: 0.75 * genA, jitter: 0.6, seed: boil * 3 + 5, taper: 0.2, step: 5 });
-        const pp = P(b.p[0], b.p[1], b.p[2]); S.glow(c, pp.x, pp.y, 26, GOLD2, 0.35 * genA);
+        c.save(); c.globalCompositeOperation = 'lighter'; u.ink(c, [a2, e2], { w: 14, color: u.alpha(GOLD, 0.14 * genA), jitter: 0.6, seed: boil * 3 + 5, taper: 0, step: 5 }); c.restore();
+        u.ink(c, [a2, e2], { w: 3.6, color: GOLD2, alpha: 0.95 * genA, jitter: 0.6, seed: boil * 3 + 5, taper: 0.15, step: 5 });
+        const pp = P(b.p[0], b.p[1], b.p[2]); S.glow(c, pp.x, pp.y, 34, GOLD2, 0.5 * genA);
       }
       // 2. plane slides in along its own in-plane axis (1.0–2.5), 3. curve draws (2.5–3.5), 4. unfold (3.8–6.3)
       const kSlide = E.out(u.seg(tau, 1.0, 2.5)); const kCurve = E.io(u.seg(tau, 2.5, 3.5)); const kUn = E.io(u.seg(tau, 3.8, 6.3));

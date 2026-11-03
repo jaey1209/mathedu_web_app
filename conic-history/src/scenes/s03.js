@@ -11,7 +11,7 @@
                living: breathing sunset glow, oil-lamp flicker + warm pool,
                warm dust motes in the sunlit table band, two distant birds
     15.8–18.0    dissolve: living elements dim, plate graded toward navy, navy layer over
-    18.0–19.4  cubes a (left) and x (right, edge ∛2·a) fade in — both at the same
+    17.7–19.1  cubes a (left) and x (right, edge ∛2·a) fade in on the almost-clean navy — both at the same
                camera depth so the projected edge ratio is exactly 1.26; labels a, a³, x, = ?
     18.9–21.6  compass sketch tied to cube a's floor edge (arc of length a, then a
                guessed 1.26× arc) that gets erased: the length resists construction
@@ -118,7 +118,7 @@ ANIM.scene({
     u.motes(c, t, { count: 24, seed: 29, color: '#9ff5ea', size: 2.2, speed: 0.4, alpha: 0.3 * kNavy, drift: 0.7 });
 
     /* ---------------------------------------- beat A: cubes a and x (18.0–31.6) */
-    const kCube = E.out(u.seg(t, 18.0, 19.4)), kOut = 1 - E.io(u.seg(t, 29.8, 31.6));
+    const kCube = E.out(u.seg(t, 17.7, 19.1)), kOut = 1 - E.io(u.seg(t, 29.8, 31.6));
     const cubeA = kCube * kOut;
     const kFloor = kCube * (1 - E.io(u.seg(t, 32.4, 33.8)));   // floor light lingers under the typing proportion
     if (kFloor > 0.01) {

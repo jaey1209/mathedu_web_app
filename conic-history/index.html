@@ -285,9 +285,9 @@
       if (a <= 0) continue;
       const who = s.who || 'n';
       if (who === 'n') {
-        const size = 44; const w = u.textW(c, s.text, size, 'sans', 600) + 70; const y = H - 118;
-        c.save(); c.globalAlpha = a * 0.55; c.fillStyle = '#05070d'; roundRect(c, W / 2 - w / 2, y - 40, w, 80, 12); c.fill(); c.restore();
-        u.text(c, s.text, W / 2, y, { size, weight: 600, color: '#f6f1e6', alpha: a, glow: 0 });
+        const size = 44; const lines = wrapText(c, s.text, size, 1640); const lh = size * 1.3; const w = Math.max(...lines.map(l => u.textW(c, l, size, 'sans', 600))) + 70; const y = H - 118 - (lines.length - 1) * lh / 2;
+        c.save(); c.globalAlpha = a * 0.55; c.fillStyle = '#05070d'; roundRect(c, W / 2 - w / 2, y - 40, w, 80 + (lines.length - 1) * lh, 12); c.fill(); c.restore();
+        lines.forEach((l, i) => u.text(c, l, W / 2, y + i * lh, { size, weight: 600, color: '#f6f1e6', alpha: a, glow: 0 }));
       } else if (who === 'o') {
         const y = H - 215; u.text(c, s.text, W / 2 + 2, y + 3, { size: 54, font: 'serif', weight: 700, color: '#000', alpha: a * 0.6, spacing: 3 });
         u.text(c, s.text, W / 2, y, { size: 54, font: 'serif', weight: 700, color: '#f6d784', alpha: a, glow: 28, glowColor: '#ffb640', spacing: 3 });
@@ -300,6 +300,8 @@
       }
     }
   }
+  // split a subtitle into at most 2 lines at a space nearest the middle when too wide
+  function wrapText(c, text, size, maxW) { if (u.textW(c, text, size, 'sans', 600) <= maxW) return [text]; const words = text.split(' '); if (words.length < 2) return [text]; let best = null, bestD = 1e9; for (let i = 1; i < words.length; i++) { const a = words.slice(0, i).join(' '), b = words.slice(i).join(' '); const d = Math.abs(u.textW(c, a, size, 'sans', 600) - u.textW(c, b, size, 'sans', 600)); if (d < bestD) { bestD = d; best = [a, b]; } } return best; }
   function roundRect(c, x, y, w, h, r) { c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath(); }
 
   function renderFrame(T, dt = 1 / 24) {
@@ -1232,9 +1234,13 @@ ANIM.PLATES = {"A01":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAlgAAAFSCAIA
      9.0–17.6  A02 procession, pan-up along the path, zoom 1.18→1.06
     16.4–17.6    dissolve A02→A03 (1.2 s)
     17.0–31.7  A03 temple interior, zoom 1.00→1.13 on the altar
-    19.5–30.6    oracle: shaft/altar light pulses, more rising dust (mood 'oracle' from 18)
-    30.6–31.7    gold flare + dissolve A03→A04
+    19.5–30.6    oracle: shaft/altar light pulses, rising dust (mood 'oracle' from 18)
+    30.6–31.8    gold flare + dissolve A03→A04
     31.0–40.0  A04 altar close-up, gold bloom rises 31–33.5 then breathes, zoom 1.00→1.12
+
+   Performance note: large radial glows are pre-rendered ONCE in init() into
+   transparent layers (sun, altar pool, bloom, flare) and composited with a
+   single drawImage per frame; only small glows (torches, censers) are live.
    ========================================================================== */
 ANIM.scene({
   id: 's01', title: '신탁이 내려오다',
@@ -1244,33 +1250,48 @@ ANIM.scene({
 
   init(api, S) {
     const { u, W, H } = api; const P = ANIM.paint;
-    // cheap, static helpers cached once (nothing heavy in this scene)
     S.beats = [
       { id: 'A01', t0: 0.0, t1: 9.6, fade: 1.0 },
       { id: 'A02', t0: 8.6, t1: 17.6, fade: 1.0 },
       { id: 'A03', t0: 16.4, t1: 31.7, fade: 1.2 },
       { id: 'A04', t0: 30.6, t1: 40.0, fade: 1.1 },
     ];
-    // local fallbacks in case a paint helper is missing (never edit paint.js)
     S.has = {
       flame: !!(P && P.flame), smoke: !!(P && P.smoke), birds: !!(P && P.birds),
       sparkle: !!(P && P.seaSparkle), particles: !!(P && P.particles),
     };
-    S.sz = 1; // normalized plate scale (rect.w / W), updated per beat
+    // --- pre-rendered glow layers (sizes in plate-units at zoom 1, i.e. R.w = 1920) ---
+    // sun (A01/A02): centred 800x800
+    S.sunL = u.layer(800, 800, c => { u.glow(c, 400, 400, 370, '#ffd98a', 0.24); u.glow(c, 400, 400, 130, '#fff0c0', 0.3); });
+    S.sunL.cx = 400; S.sunL.cy = 400;
+    // altar pool (A03): altar point at (600,450); pool above, wide floor glow below
+    S.altarL = u.layer(1000, 980, c => { u.glow(c, 500, 410, 310, '#ffd98a', 1.0); u.glow(c, 500, 480, 480, '#ffb640', 0.5); });
+    S.altarL.cx = 500; S.altarL.cy = 430;
+    // bloom (A04): full frame, cube centre at (960,594) for zoom 1 — overall light only, no edge lines
+    S.bloomL = u.layer(W, H, c => {
+      c.fillStyle = u.alpha('#f3d27a', 0.05); c.fillRect(0, 0, W, H);               // faint warm wash
+      u.glow(c, 960, 594, 860, '#f3d27a', 0.14); u.glow(c, 960, 594, 480, '#f6dc8a', 0.23);
+      u.glow(c, 960, 486, 150, '#fff3c4', 0.14); u.glow(c, 960, 920, 960, '#f3d27a', 0.08);
+    });
+    // flare at the end of the oracle: full frame
+    S.flareL = u.layer(W, H, c => { u.glow(c, 960, 594, 1134, '#fff0c4', 0.85); u.glow(c, 960, 594, 486, '#ffffff', 0.5); });
   },
 
   draw(api, t, S) {
     const { ctx: c, u, W, H } = api; const P = ANIM.paint;
 
     /* ---------------------------------------------------------- helpers */
-    // oracle pulse (19.5–30.6): slow heartbeat, 0..1, eased in; keeps rising into the flare
+    // oracle pulse (19.5–30.6): slow heartbeat 0..1, eased in; keeps rising into the flare
     const oracleEnv = u.smooth(19.5, 21.0, t) * (1 - u.smooth(31.4, 32.0, t));
     const beat = 0.5 + 0.5 * Math.sin((t - 19.5) * Math.PI * 2 * 0.42 - Math.PI / 2);
     const pulse = oracleEnv * (0.35 + 0.65 * beat);
-    // flare at the end of the oracle (30.6 → peak 31.1 → gone 32.0)
-    const flare = u.smooth(30.6, 31.1, t) * (1 - u.smooth(31.1, 32.0, t));
-
+    // flare at the end of the oracle (30.6 → peak 31.1 → gone 31.8)
+    const flare = u.smooth(30.6, 31.1, t) * (1 - u.smooth(31.1, 31.8, t));
     const breathe = (speed, seed) => 0.85 + 0.15 * u.noise2(t * speed + seed * 5.3, seed);
+    // draw a cached glow layer centred on (x,y), scaled by s, with alpha
+    const layerAt = (L, x, y, s, alpha, cx = L.cx || L.width / 2, cy = L.cy || L.height / 2) => {
+      if (alpha <= 0.002) return; c.save(); c.globalAlpha *= alpha; c.drawImage(L, x - cx * s, y - cy * s, L.width * s, L.height * s); c.restore();
+    };
 
     /* ----------------------------------------------------------- beats */
     function A01(a) {
@@ -1280,15 +1301,12 @@ ANIM.scene({
       c.save(); c.globalAlpha = a;
       // 1. low dawn sun breathing at the horizon (left)
       const sun = u.platePt(R, 0.07, 0.6); const br = breathe(0.5, 3);
-      u.glow(c, sun.x, sun.y, 0.34 * R.h * br, '#ffd98a', 0.22 * br);
-      u.glow(c, sun.x, sun.y, 0.12 * R.h, '#fff0c0', 0.25 * br);
+      layerAt(S.sunL, sun.x, sun.y, sz * br, br);
       // 2. sun path sparkling on the sea
       const hz = u.platePt(R, 0, 0.775).y;
       if (S.has.sparkle) P.seaSparkle(c, t, { horizonY: hz, bottom: R.y + R.h + 10, seed: 5, count: 55, x: u.platePt(R, 0.16, 0).x, spread: 0.42 * R.w, alpha: 0.7, color: '#fff0c0' });
       // 3. gulls over the bay
       if (S.has.birds) P.birds(c, t, { count: 4, seed: 11, box: [R.x + R.w * 0.06, R.y + R.h * 0.4, R.w * 0.42, R.h * 0.22], scale: 1.15 * sz, color: '#3a3350', speed: 0.7, alpha: 0.7 });
-      // warm unifying grade
-      u.grade(c, '#ffb060', 0.07);
       c.restore();
     }
 
@@ -1299,8 +1317,7 @@ ANIM.scene({
       c.save(); c.globalAlpha = a;
       // 1. low sun over the sea (breathing)
       const sun = u.platePt(R, 0.13, 0.33); const br = breathe(0.45, 7);
-      u.glow(c, sun.x, sun.y, 0.28 * R.h * br, '#ffd98a', 0.26 * br);
-      u.glow(c, sun.x, sun.y, 0.08 * R.h, '#fff4d0', 0.35 * br);
+      layerAt(S.sunL, sun.x, sun.y, sz * 0.8 * br, br);
       // 2. torches: boiling flames + thin smoke, at the painted torch heads
       const torches = [[0.437, 0.335, 1.0, 21], [0.537, 0.30, 0.9, 22], [0.65, 0.36, 0.95, 23]];
       torches.forEach(([fx, fy, k, seed]) => {
@@ -1311,8 +1328,6 @@ ANIM.scene({
       });
       // 3. two distant gulls over the sea (left)
       if (S.has.birds) P.birds(c, t, { count: 2, seed: 13, box: [R.x + R.w * 0.02, R.y + R.h * 0.22, R.w * 0.28, R.h * 0.14], scale: 0.8 * sz, color: '#4a4058', speed: 0.6, alpha: 0.55 });
-      // golden dawn grade
-      u.grade(c, '#ffc070', 0.07);
       c.restore();
     }
 
@@ -1321,24 +1336,23 @@ ANIM.scene({
       const R = u.plate(c, 'A03', Object.assign(kb, { alpha: a })); if (!R) return;
       const sz = R.w / W; const lightK = 1 + 0.6 * pulse + 1.2 * flare;
       c.save(); c.globalAlpha = a;
-      // 1. breathing light shaft from the oculus to the altar (additive, on top of the painted one)
+      // 1. breathing light shaft from the oculus to the altar (additive, over the painted one)
       const top = u.platePt(R, 0.5, -0.02), alt = u.platePt(R, 0.5, 0.74);
       u.shaft(c, t, top.x, top.y, alt.x, alt.y, 0.035 * R.w, 0.11 * R.w, '#ffe3a0', 0.12 * lightK, 2);
       u.shaft(c, t, top.x, top.y, alt.x, alt.y + 0.03 * R.h, 0.015 * R.w, 0.05 * R.w, '#fff2cc', 0.1 * lightK, 5);
-      // altar pool + floor glow pulsing with the oracle
-      u.glow(c, alt.x, alt.y - 0.02 * R.h, 0.16 * R.w * (0.9 + 0.1 * pulse), '#ffd98a', (0.16 + 0.22 * pulse) * (1 + flare));
-      u.glow(c, alt.x, alt.y + 0.05 * R.h, 0.3 * R.w, '#ffb640', 0.08 + 0.1 * pulse);
+      // altar pool + floor glow pulsing with the oracle (one cached layer)
+      layerAt(S.altarL, alt.x, alt.y, sz * (0.92 + 0.08 * pulse), (0.18 + 0.22 * pulse) * (1 + 0.8 * flare));
       // 2. dust motes rising inside the shaft (more visible as the oracle speaks)
       u.motes(c, t, { count: 70, box: [alt.x - 0.12 * R.w, R.y, 0.24 * R.w, alt.y - R.y + 0.02 * R.h], seed: 9, color: '#ffe9b0', size: 2.4 * sz, speed: 0.55, alpha: 0.28 + 0.3 * pulse, drift: 0.8 });
-      // 3. censer smoke (left & right tripods)
+      // 3. censer smoke (left & right tripods) + ember glow in the bowls
       const cen = [[0.14, 0.635, 41], [0.858, 0.70, 42]];
       cen.forEach(([fx, fy, seed]) => {
         const p = u.platePt(R, fx, fy);
         if (S.has.smoke) P.smoke(c, t, { x: p.x, y: p.y, seed, scale: 0.95 * sz, alpha: 0.32, color: '#d9d2cc', count: 10, rise: 0.42 * R.h, wind: 0.12 });
         u.glow(c, p.x, p.y, 0.045 * R.w * breathe(5, seed), '#ffb640', 0.22);
       });
-      // oracle: whole frame warms and brightens on the heartbeat
-      if (pulse > 0) u.grade(c, '#ffd27a', 0.09 * pulse, 'soft-light');
+      // oracle: the whole frame warms and brightens on the heartbeat
+      if (pulse > 0.02) u.grade(c, '#ffd27a', 0.09 * pulse, 'soft-light');
       c.restore();
     }
 
@@ -1352,19 +1366,11 @@ ANIM.scene({
       // 1. light from above breathing
       const top = u.platePt(R, 0.5, -0.05), cube = u.platePt(R, 0.5, 0.55);
       u.shaft(c, t, top.x, top.y, cube.x, cube.y - 0.12 * R.h, 0.05 * R.w, 0.16 * R.w, '#ffe3a0', 0.1 + 0.06 * e, 8);
-      // 2. golden bloom on the altar (overall light only, no edge lines)
-      u.glow(c, cube.x, cube.y, 0.78 * R.h, '#f3d27a', 0.16 * e * br);
-      u.glow(c, cube.x, cube.y, 0.42 * R.h * (0.92 + 0.08 * br), '#f6dc8a', 0.32 * e * br);
-      u.glow(c, cube.x, cube.y - 0.08 * R.h, 0.16 * R.h, '#fff3c4', 0.28 * e * br);
-      // floor reflection
-      u.glow(c, cube.x, cube.y + 0.3 * R.h, 0.5 * R.w, '#f3d27a', 0.1 * e, 0.2);
+      // 2. golden bloom on the altar (overall light only — no glowing edge lines)
+      layerAt(S.bloomL, cube.x, cube.y, sz, e * br, 960, 594);
       // 3. rising glints & dust around the altar
-      if (S.has.particles) {
-        P.particles(c, t, { kind: 'glint', count: 16, box: [cube.x - 0.22 * R.w, cube.y - 0.35 * R.h, 0.44 * R.w, 0.6 * R.h], seed: 61, size: 1.1 * sz, speed: 0.8, alpha: 0.65 * e });
-      }
+      if (S.has.particles) P.particles(c, t, { kind: 'glint', count: 16, box: [cube.x - 0.22 * R.w, cube.y - 0.35 * R.h, 0.44 * R.w, 0.6 * R.h], seed: 61, size: 1.1 * sz, speed: 0.8, alpha: 0.65 * e });
       u.motes(c, t, { count: 50, box: [cube.x - 0.3 * R.w, cube.y - 0.45 * R.h, 0.6 * R.w, 0.8 * R.h], seed: 63, color: '#ffe9b0', size: 2.6 * sz, speed: 0.7, alpha: 0.4 * e, drift: 0.9 });
-      // gold grade
-      u.grade(c, '#f3d27a', 0.2 * e, 'soft-light');
       c.restore();
     }
 
@@ -1382,9 +1388,1333 @@ ANIM.scene({
     if (!drawn) { c.fillStyle = '#101a33'; c.fillRect(0, 0, W, H); }
 
     /* --------------------------------------------- oracle-end gold flare */
-    if (flare > 0) {
-      u.glow(c, W / 2, H * 0.55, H * 1.05, '#fff0c4', 0.85 * flare);
-      u.glow(c, W / 2, H * 0.55, H * 0.45, '#ffffff', 0.5 * flare);
+    if (flare > 0.002) { c.save(); c.globalAlpha = flare; c.drawImage(S.flareL, 0, 0); c.restore(); }
+  },
+});
+
+
+/* ===== src/scenes/s02.js ===== */
+/* ============================================================================
+   S02 — 두 배로 만들었는데, 왜 실패했을까?  (global 40–80 s, local 0–40)
+   Beats (local seconds):
+     0–14   B01 workshop plate, slow push-in; dust, sea sparkle, stone-dust puffs, gulls
+     6–12   B02 insert (rope measuring), dissolve in/out
+     14–17  crossfade to navy math space; cubes a / 2a fade in (15–18)
+     17.5–  labels a, a³, 2a
+     20.4–24.3  eight unit cubes placed one by one (held steps) → 8a³ (24.6)
+     25.4–29.3  centre line  모서리 길이 2배 → 부피 8배
+     29.5–33  big cube fades away; 32–35 dotted ghost cube (edge ∛2·a) draws on; ? / 2a³
+   ========================================================================== */
+ANIM.scene({
+  id: 's02', title: '두 배로 만들었는데, 왜 실패했을까?',
+  start: ANIM.TIMES.s02[0], end: ANIM.TIMES.s02[1],
+  mood: t => (t < 20 ? 'work' : 'math'),
+  fadeIn: 0.9, fadeOut: 0.9,
+
+  init(api, S) {
+    const { u, W, H } = api, P = ANIM.paint;
+    // navy math space: painted sky + nebula + stars + paper, built once
+    S.navy = u.layer(W, H, c => {
+      P.sky(c, { preset: 'navyMath', seed: 22, horizon: H * 1.05, clouds: false });
+      P.nebula(c, { seed: 31, alpha: 0.75, count: 10, colors: ['#1f3f6e', '#2a2a66', '#1c4d58', '#3a2f66'] });
+      P.stars(c, { seed: 41, count: 140, yMax: H, alpha: 0.55 });
+      u.paper(c, 0.14);
+    });
+    // 3D layout (y up, floor at y = -1)
+    S.big = { o: [-3.55, -1, -1], s: 2 };            // 2a cube  (centre x = -2.55)
+    S.small = { o: [1.55, -1, -0.5], s: 1 };          // a cube   (centre x = 2.05)
+    S.cbrt2 = Math.cbrt(2);
+    S.ghost = { o: [-2.55 - S.cbrt2 / 2, -1, -S.cbrt2 / 2], s: S.cbrt2 };   // wanted cube, edge ∛2·a
+    // 8 unit sub-cubes of the 2a cube (origin offsets), placement order: bottom layer back→front, then top
+    S.subs = [];
+    for (let y = 0; y < 2; y++) for (let z = 0; z < 2; z++) for (let x = 0; x < 2; x++) S.subs.push([S.big.o[0] + x, S.big.o[1] + y, S.big.o[2] + z]);
+    S.T = { subStart: 20.4, subStep: 0.55 };
+  },
+
+  draw(api, t, S) {
+    const { ctx: c, u, W, H } = api, P = ANIM.paint, E = u.ease;
+    const boil = api.boil;
+
+    /* ---------------------------------------------------------- plates (0–17) */
+    if (t < 17.2) {
+      const kb1 = u.kb(t, 0, 14, { zoom: 1.0, fx: 0.45, fy: 0.46 }, { zoom: 1.10, fx: 0.42, fy: 0.40 });
+      const r1 = u.plate(c, 'B01', kb1);
+      const pp = (px, py) => u.platePt(r1, px, py);
+      // living elements — B01 (image-fraction positions)
+      // 1) sea sparkle, clipped to the visible strip of sea between the big block and the awning
+      c.save(); u.polyPath(c, [pp(0.57, 0.365), pp(0.74, 0.365), pp(0.74, 0.47), pp(0.57, 0.475)], true); c.clip();
+      P.seaSparkle(c, t, { horizonY: pp(0, 0.37).y, bottom: pp(0, 0.47).y, x: pp(0.655, 0).x, spread: r1.w * 0.16, count: 26, seed: 5, alpha: 0.55 });
+      c.restore();
+      // 2) stone dust from the two chisels (small warm puffs)
+      P.smoke(c, t, { x: pp(0.485, 0.2).x, y: pp(0.485, 0.2).y, seed: 3, scale: 0.32, alpha: 0.2, color: '#f3ead8', count: 5, rise: 70, wind: 0.3 });
+      P.smoke(c, t, { x: pp(0.565, 0.705).x, y: pp(0.565, 0.705).y, seed: 9, scale: 0.28, alpha: 0.18, color: '#f3ead8', count: 4, rise: 55, wind: -0.2 });
+      // 3) drifting dust / grit in the sunlight over the yard
+      P.particles(c, t, { kind: 'dust', count: 26, box: [pp(0.08, 0).x, pp(0, 0.42).y, r1.w * 0.64, r1.h * 0.5], seed: 7, size: 1.1, speed: 0.6, alpha: 0.5, color: '#fff0c8' });
+      // 4) two gulls over the sea gap
+      P.birds(c, t, { count: 2, seed: 11, box: [pp(0.595, 0).x, pp(0, 0.05).y, r1.w * 0.14, r1.h * 0.16], scale: 0.65, speed: 0.55, color: '#3a3a4a', alpha: 0.7 });
+      u.grade(c, '#ffd9a0', 0.07);
+
+      // B02 insert cut: dissolve in 5.6–6.6, out 11.4–12.4
+      const a2 = Math.min(E.io(u.seg(t, 5.6, 6.6)), 1 - E.io(u.seg(t, 11.4, 12.4)));
+      if (a2 > 0) {
+        const kb2 = u.kb(t, 5.6, 12.4, { zoom: 1.04, fx: 0.50, fy: 0.46 }, { zoom: 1.13, fx: 0.47, fy: 0.42 }, E.sine);
+        kb2.alpha = a2; const r2 = u.plate(c, 'B02', kb2);
+        c.save(); c.globalAlpha *= a2;
+        const q = (px, py) => u.platePt(r2, px, py);
+        // sunlit dust motes drifting over the marble; glints on the distant sea (top right)
+        u.motes(c, t, { count: 18, box: [q(0.05, 0).x, q(0, 0.05).y, r2.w * 0.9, r2.h * 0.9], seed: 13, color: '#fff3d0', size: 2.4, speed: 0.45, alpha: 0.32, drift: 0.6 });
+        P.particles(c, t, { kind: 'glint', count: 9, box: [q(0.74, 0).x, q(0, 0.02).y, r2.w * 0.25, r2.h * 0.12], seed: 17, size: 0.7, alpha: 0.6 });
+        u.grade(c, '#ffd090', 0.08);
+        c.restore();
+      }
+    }
+
+    /* --------------------------------------------------- math space (14–40) */
+    if (t >= 14) {
+      const kNavy = E.io(u.seg(t, 14, 17));
+      if (t < 17.2) {
+        // plate is already on screen: lay the navy space over it with rising alpha
+        c.save(); c.globalAlpha = kNavy; c.drawImage(S.navy, 0, 0); c.restore();
+      } else c.drawImage(S.navy, 0, 0);
+      if (kNavy <= 0) return;
+
+      // slow camera drift
+      const yaw = 0.56 + 0.12 * E.sine(u.seg(t, 14, 40)), pitch = 0.33;
+      const Pj = u.camera({ yaw, pitch, dist: 10, fov: 1560, cx: W * 0.53, cy: 570, target: [0, 0, 0] });
+      const kCube = E.out(u.seg(t, 15, 18));
+
+      // flat floor light under the cubes (breathing) — grounds the models in the space
+      const br = 0.8 + 0.2 * Math.sin(t * 0.9);
+      const fb = Pj(-2.55, -1, 0), fs = Pj(2.05, -1, 0);
+      c.save(); c.globalAlpha = kCube * 0.9; c.translate(0, fb.y + 10); c.scale(1, 0.32); c.translate(0, -(fb.y + 10));
+      u.glow(c, fb.x, fb.y + 10, 620, '#58e0d0', 0.13 * br); u.glow(c, fs.x, fs.y + 10, 380, '#58e0d0', 0.11 * br);
+      c.restore();
+      u.motes(c, t, { count: 24, seed: 29, color: '#9ff5ea', size: 2.2, speed: 0.4, alpha: 0.3 * kNavy, drift: 0.7 });
+
+      /* --- big cube (2a) and its 8 unit cubes --- */
+      const nSub = t < S.T.subStart ? 0 : Math.min(8, Math.floor((t - S.T.subStart) / S.T.subStep) + 1);
+      const kBigFade = 1 - E.io(u.seg(t, 29.5, 33.2));         // question beat: big cube dissolves
+      const bigA = kCube * kBigFade;
+      if (bigA > 0.01) {
+        const outerA = nSub ? 0.4 : 1;
+        u.cube(c, Pj, { origin: S.big.o, size: S.big.s, color: '#58e0d0', edge: '#9ff5ea', faceAlpha: nSub ? 0.04 : 0.16, w: 3, jitter: 0.8, seed: boil * 3 + 1, alpha: bigA * outerA, hiddenAlpha: 0.22 });
+        if (nSub) {
+          // draw the placed sub-cubes back → front
+          const placed = S.subs.slice(0, nSub).map((o, i) => { const q = Pj(o[0] + 0.5, o[1] + 0.5, o[2] + 0.5); return { o, i, z: q.z }; }).sort((a, b) => b.z - a.z);
+          placed.forEach(({ o, i }) => {
+            const t0 = S.T.subStart + i * S.T.subStep; const kd = E.outc(u.seg(api.tq, t0, t0 + 0.3));   // 12 fps drop-in
+            // each block slightly smaller than its cell so the eight read as separate stones
+            const g = 0.05, org = [o[0] + g, o[1] + g + (1 - kd) * 1.1, o[2] + g];
+            u.cube(c, Pj, { origin: org, size: 1 - 2 * g, color: '#6fe8da', edge: '#c8fff8', faceAlpha: 0.26, w: 2.6, jitter: 0.7, seed: boil * 5 + 40 + i * 13, alpha: bigA * (0.35 + 0.65 * kd), hiddenAlpha: 0.1 });
+            // soft flash as the block settles
+            const kf = 1 - u.seg(t, t0 + 0.2, t0 + 0.75); if (kf > 0) { const q = Pj(o[0] + 0.5, o[1] + 0.5, o[2] + 0.5); u.glow(c, q.x, q.y, 150 * q.s / 176, '#dffffb', 0.5 * kf * kf * bigA); }
+          });
+        }
+      }
+
+      /* --- small cube (a) --- */
+      u.cube(c, Pj, { origin: S.small.o, size: S.small.s, color: '#58e0d0', edge: '#9ff5ea', faceAlpha: 0.16, w: 3, jitter: 0.8, seed: boil * 7 + 200, alpha: kCube, hiddenAlpha: 0.25 });
+
+      /* --- labels --- */
+      const eb = bottomEdge(Pj, S.big.o, S.big.s), es = bottomEdge(Pj, S.small.o, S.small.s);
+      const gold = '#f3d27a', ivory = '#f6f1e6';
+      const lab = (str, x, y, a, o = {}) => { if (a > 0.01) u.math(c, str, x, y, Object.assign({ size: 54, color: gold, alpha: a, glow: 18 }, o)); };
+      lab('a', es.mx, es.my + 44, E.out(u.seg(t, 17.5, 18.3)));
+      lab('a³', es.mx, es.my + 102, E.out(u.seg(t, 18.6, 19.4)), { size: 50, color: ivory, glow: 12 });
+      lab('2a', eb.mx, eb.my + 44, E.out(u.seg(t, 18.0, 18.8)) * kBigFade);
+      // running count while the unit cubes fill, then 8a³
+      if (nSub && t < 24.6) { const top = topPoint(Pj, S.big.o, S.big.s); u.math(c, String(nSub), top.x, top.y - 52, { size: 66, color: '#c8fff8', glow: 22, alpha: 0.95 * kBigFade }); }
+      if (t >= 24.6) { const k8 = E.out(u.seg(t, 24.6, 25.3)); const pulse = 1 + 0.08 * Math.sin((t - 24.6) * 5) * (1 - u.seg(t, 24.6, 27)); lab('8a³', eb.mx, eb.my + 102, k8 * kBigFade, { size: 56 * pulse, color: '#ffe9a8', glow: 26 }); }
+      // centre line
+      const kC = Math.min(E.out(u.seg(t, 25.4, 26.1)), 1 - E.io(u.seg(t, 29.3, 30.1)));
+      if (kC > 0.01) u.text(c, '모서리 길이 2배  →  부피 8배', W / 2, 100, { size: 58, font: 'serif', weight: 700, color: '#f6e9c8', alpha: kC, glow: 26, glowColor: '#d9a441', spacing: 2 });
+
+      /* --- question beat: ghost cube with edge ∛2·a, dotted --- */
+      const kG = E.io(u.seg(t, 32, 35.2));
+      if (kG > 0.01) {
+        dottedCube(u, c, Pj, S.ghost.o, S.ghost.s, { p: kG, color: gold, w: 3.2, seed: boil * 11 + 500 });
+        const eg = bottomEdge(Pj, S.ghost.o, S.ghost.s);
+        const kQ = E.out(u.seg(t, 34.6, 35.4)), breathe = 0.7 + 0.3 * (0.5 + 0.5 * Math.sin(t * 1.6));
+        const cg = Pj(-2.55, -1 + S.cbrt2 / 2, 0);
+        u.text(c, '?', cg.x, cg.y, { size: 150, font: 'serif', weight: 700, color: '#ffe9a8', alpha: kQ * breathe, glow: 40, glowColor: '#f3d27a' });
+        lab('?', eg.mx, eg.my + 44, kQ, { size: 54, color: gold });
+        lab('2a³', eg.mx, eg.my + 102, E.out(u.seg(t, 35.6, 36.4)), { size: 56, color: '#ffe9a8', glow: 26 });
+      }
+    }
+
+    /* helpers (scene-local) */
+    function topPoint(Pj, o, s) {   // highest projected vertex of the cube
+      let best = null; for (let i = 0; i < 8; i++) { const p = Pj(o[0] + (i & 1) * s, o[1] + ((i >> 1) & 1) * s, o[2] + ((i >> 2) & 1) * s); if (!best || p.y < best.y) best = p; } return best;
+    }
+    function bottomEdge(Pj, o, s) {
+      const cs = [[o[0], o[1], o[2]], [o[0] + s, o[1], o[2]], [o[0] + s, o[1], o[2] + s], [o[0], o[1], o[2] + s]].map(v => Pj(v[0], v[1], v[2]));
+      let k = 0; cs.forEach((p, i) => { if (p.y > cs[k].y) k = i; });
+      const a = cs[k], n1 = cs[(k + 1) % 4], n2 = cs[(k + 3) % 4];
+      const b = Math.hypot(n1.x - a.x, n1.y - a.y) > Math.hypot(n2.x - a.x, n2.y - a.y) ? n1 : n2;   // longer visible bottom edge
+      return { a, b, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
+    }
+    function dottedCube(u, c, Pj, o, s, opt) {
+      const { p = 1, color = '#f3d27a', w = 2.5, seed = 1, dash = 17, gap = 13 } = opt;
+      const faces = u.cubeFaces(Pj, o, s), front = faces.slice(3), keys = new Set();
+      const key = (a, b) => { const ka = a.x.toFixed(1) + ',' + a.y.toFixed(1), kb = b.x.toFixed(1) + ',' + b.y.toFixed(1); return ka < kb ? ka + '|' + kb : kb + '|' + ka; };
+      front.forEach(f => { for (let i = 0; i < 4; i++) keys.add(key(f.pts[i], f.pts[(i + 1) % 4])); });
+      u.cubeEdges(Pj, o, s).forEach(([a, b], i) => {
+        const vis = keys.has(key(a, b)); const L = Math.hypot(b.x - a.x, b.y - a.y); const n = Math.max(1, Math.floor(L / (dash + gap))); const nn = Math.ceil(n * p);
+        for (let k = 0; k < nn; k++) {
+          const t0 = (k * (dash + gap)) / L, t1 = Math.min(1, (k * (dash + gap) + dash) / L);
+          const pts = [{ x: u.lerp(a.x, b.x, t0), y: u.lerp(a.y, b.y, t0) }, { x: u.lerp(a.x, b.x, t1), y: u.lerp(a.y, b.y, t1) }];
+          if (vis) { c.save(); c.globalCompositeOperation = 'lighter'; u.ink(c, pts, { w: w * 3.2, color: u.alpha(color, 0.12), jitter: 0.5, seed: seed + i * 7 + k, taper: 0, step: 4 }); c.restore(); }
+          u.ink(c, pts, { w: vis ? w : w * 0.7, color, alpha: vis ? 0.85 : 0.35, jitter: 0.6, seed: seed + i * 7 + k, taper: 0.2, step: 4 });
+        }
+      });
+    }
+  },
+});
+
+
+/* ===== src/scenes/s03.js ===== */
+/* ============================================================================
+   S03 — 수학자들이 마주한 난제  (global 80–120 s, local 0–40)
+   Hybrid: C01 plate (stoa at sunset, three mathematicians around a sand tray)
+   → navy math space (cube a vs cube x, x³ = 2a³, "water" pours showing the
+   volume is exactly 2a³) → Hippocrates' proportion a : x = x : y = y : 2a
+   turning into four glowing segments that flow out toward the next scene.
+
+   Timing map (scene-local seconds; subtitles from script.js in brackets):
+     0.0–18.0  C01 plate, one slow push-in toward the sand tray (zoom 1.00→1.10)
+               living: breathing sunset glow, oil-lamp flicker + warm pool,
+               dust motes in the low light, two distant birds   [2–6.8, 8–15.5]
+    15.8–18.0    dissolve to the navy math space
+    17.5–19.2  cubes a (left) and x (right, edge ∛2·a) fade in; labels a, a³, x
+    19.2–21.4  x³ = 2a³ typed (top)                                 [18–25]
+    22.0–24.0  x = ∛2 × a typed;  24.4  x ≈ 1.26a
+    22.5–25.0  pour 1: cube a drains into cube x → water level a³/x² ("a³")
+    25.2–25.8  cube a refills;  26.0–28.5  pour 2 → cube x exactly full ("2a³")
+    29.8–31.6  cubes + formulas fade out                            [26–30.5]
+    31.3–34.3  proportion  a : x = x : y = y : 2a  typed             [31.5–39.3]
+    34.0–36.7  four glowing segments a, x, y, 2a draw on, one per 0.7 s
+    36.9–      "× ∛2" ratio marks between the rows
+    38.0–40.0  segments converge and flow off to the right (engine fade-out 0.9)
+   ========================================================================== */
+ANIM.scene({
+  id: 's03', title: '수학자들이 마주한 난제',
+  start: ANIM.TIMES.s03[0], end: ANIM.TIMES.s03[1],
+  mood: 'math',
+  fadeIn: 0.9, fadeOut: 0.9,
+
+  init(api, S) {
+    const { u, W, H } = api, P = ANIM.paint;
+    // navy math space: painted sky + nebula + stars + paper, built once
+    S.navy = u.layer(W, H, c => {
+      P.sky(c, { preset: 'navyMath', seed: 33, horizon: H * 1.05, clouds: false });
+      P.nebula(c, { seed: 37, alpha: 0.75, count: 10, colors: ['#1f3f6e', '#2a2a66', '#1c4d58', '#3a2f66'] });
+      P.stars(c, { seed: 43, count: 140, yMax: H, alpha: 0.55 });
+      u.paper(c, 0.14);
+    });
+    // availability of paint helpers (local fallbacks below; paint.js is never edited)
+    S.has = { lamp: !!(P && P.lampFlicker), flame: !!(P && P.flame), birds: !!(P && P.birds), particles: !!(P && P.particles) };
+    // cached radial-glow sprites (same stops as u.glow) — big gradient fills are the costliest thing in software raster
+    S.spr = {};
+    S.glow = (c, x, y, r, color, alpha = 0.6) => {
+      let s = S.spr[color];
+      if (!s) s = S.spr[color] = u.layer(256, 256, cc => { const g = cc.createRadialGradient(128, 128, 0, 128, 128, 128); g.addColorStop(0, color); g.addColorStop(0.35, u.alpha(color, 0.5)); g.addColorStop(1, u.alpha(color, 0)); cc.fillStyle = g; cc.fillRect(0, 0, 256, 256); });
+      c.save(); c.globalAlpha *= alpha; c.drawImage(s, x - r, y - r, r * 2, r * 2); c.restore();
+    };
+    // 3D layout (y up, floor at y = -1). cube a: edge 1, cube x: edge ∛2 ≈ 1.26
+    S.cbrt2 = Math.cbrt(2);
+    S.A = { o: [-3.05, -1, -0.5], s: 1 };                              // centre x = -2.55
+    S.X = { o: [1.45 - S.cbrt2 / 2, -1, -S.cbrt2 / 2], s: S.cbrt2 };   // centre x =  1.45
+    // pour windows (cube a → cube x), each carrying exactly a³
+    S.pours = [[22.5, 25.0], [26.0, 28.5]];
+    S.refill = [25.2, 25.8];
+    // formula strings + measured widths (typed left-aligned from a centred origin)
+    S.F = { f1: 'x³ = 2a³', f2: 'x = ∛2 × a', f3: 'x ≈ 1.26a', prop: 'a : x = x : y = y : 2a' };
+    const m = u.layer(8, 8).getContext('2d');
+    S.w = { f1: u.math(m, S.F.f1, 0, 0, { size: 66 }), f2: u.math(m, S.F.f2, 0, 0, { size: 60 }), prop: u.math(m, S.F.prop, 0, 0, { size: 76 }) };
+    // Hippocrates segments: a, x = ∛2·a, y = ∛4·a, 2a  (unit = 300 px)
+    S.unit = 360;
+    S.segs = [
+      { lab: 'a', len: 1, t0: 34.0 },
+      { lab: 'x', len: S.cbrt2, t0: 34.7 },
+      { lab: 'y', len: S.cbrt2 * S.cbrt2, t0: 35.4 },
+      { lab: '2a', len: 2, t0: 36.1 },
+    ];
+  },
+
+  draw(api, t, S) {
+    const { ctx: c, u, W, H } = api, P = ANIM.paint, E = u.ease;
+    const boil = api.boil, tq = api.tq;
+    const breathe = (speed, seed) => 0.85 + 0.15 * u.noise2(t * speed + seed * 5.3, seed);
+
+    /* ------------------------------------------------------------ plate (0–18) */
+    const kNavy = E.io(u.seg(t, 15.8, 18.0));
+    if (t < 18.0) {
+      const kb = u.kb(t, 0, 16, { zoom: 1.0, fx: 0.5, fy: 0.5 }, { zoom: 1.10, fx: 0.47, fy: 0.6 });
+      const R = u.plate(c, 'C01', kb);
+      if (R) {
+        const pp = (px, py) => u.platePt(R, px, py); const sz = R.w / W;
+        // 1. sunset: breathing glow at the painted sun, warm bloom along the horizon
+        const sun = pp(0.625, 0.215); const br = breathe(0.45, 3);
+        S.glow(c, sun.x, sun.y, 0.34 * R.h * br, '#ffc46a', 0.2 * br);
+        S.glow(c, sun.x, sun.y, 0.1 * R.h, '#fff0c0', 0.32 * br);
+        // 2. oil lamp (bottom right): boiling flame + flickering warm pool
+        const lamp = pp(0.757, 0.885);
+        if (S.has.lamp) P.lampFlicker(c, t, { x: lamp.x, y: lamp.y, scale: 0.6 * sz, seed: 5, pool: 300, alpha: 0.95 });
+        else { u.lamp(c, lamp.x, lamp.y - 10 * sz, 180 * sz, t, { alpha: 0.3, seed: 5 }); S.glow(c, lamp.x, lamp.y - 8 * sz, 22 * sz, '#fff3c4', 0.9); }
+        // 3. dust motes drifting in the low sunlight over the table
+        u.motes(c, t, { count: 28, box: [pp(0.08, 0).x, pp(0, 0.28).y, R.w * 0.84, R.h * 0.58], seed: 17, color: '#ffe2b0', size: 2.3 * sz, speed: 0.4, alpha: 0.26, drift: 0.7 });
+        // 4. two distant birds in the sky gap left of the colonnade
+        if (S.has.birds) P.birds(c, t, { count: 2, seed: 19, box: [pp(0.13, 0).x, pp(0, 0.04).y, R.w * 0.16, R.h * 0.1], scale: 0.6 * sz, color: '#4a3a50', speed: 0.5, alpha: 0.5 });
+        u.grade(c, '#ffb060', 0.07);
+      }
+    }
+
+    /* ------------------------------------------------------ math space (15.8–40) */
+    if (kNavy <= 0) return;
+    c.save(); c.globalAlpha = kNavy; c.drawImage(S.navy, 0, 0); c.restore();
+
+    const gold = '#f3d27a', ivory = '#f6f1e6', teal = '#58e0d0';
+    u.motes(c, t, { count: 24, seed: 29, color: '#9ff5ea', size: 2.2, speed: 0.4, alpha: 0.3 * kNavy, drift: 0.7 });
+
+    /* ---------------------------------------- beat A: cubes a and x (17.5–31.6) */
+    const kCube = E.out(u.seg(t, 17.5, 19.2)), kOut = 1 - E.io(u.seg(t, 29.8, 31.6));
+    const cubeA = kCube * kOut;
+    if (cubeA > 0.01) {
+      const yaw = 0.52 + 0.1 * E.sine(u.seg(t, 17, 31)), pitch = 0.32;
+      const Pj = u.camera({ yaw, pitch, dist: 10, fov: 1760, cx: W * 0.5, cy: 628, target: [0, 0, 0] });
+      const cA = [S.A.o[0] + 0.5, S.A.o[2] + 0.5], cX = [S.X.o[0] + S.X.s / 2, S.X.o[2] + S.X.s / 2];
+
+      // floor light under the cubes (breathing)
+      const brf = 0.8 + 0.2 * Math.sin(t * 0.9);
+      const fa = Pj(cA[0], -1, cA[1]), fx = Pj(cX[0], -1, cX[1]);
+      c.save(); c.globalAlpha = cubeA * 0.9; c.translate(0, fa.y + 10); c.scale(1, 0.32); c.translate(0, -(fa.y + 10));
+      S.glow(c, fa.x, fa.y + 10, 400, teal, 0.11 * brf); S.glow(c, fx.x, fx.y + 10, 520, teal, 0.13 * brf);
+      c.restore();
+
+      // --- water: a³ poured twice from cube a into cube x ---
+      let poured = 0, levelA = 1, streamK = 0;
+      S.pours.forEach(([p0, p1], i) => {
+        const k = E.io(u.seg(t, p0, p1)); poured += k;
+        if (t >= p0 && t < p1) { levelA = 1 - k; streamK = Math.min(E.out(u.seg(t, p0, p0 + 0.4)), 1 - E.in(u.seg(t, p1 - 0.5, p1))); }
+        else if (t >= p1) levelA = 0;
+      });
+      if (t >= S.refill[0] && t < S.pours[1][0]) levelA = E.out(u.seg(t, S.refill[0], S.refill[1]));
+      const levelX = poured / (S.X.s * S.X.s);           // height of poured volume in cube x (units of a)
+      const kWater = E.out(u.seg(t, 19.5, 20.5)) * cubeA; // water appears shortly after the cubes
+
+      // draw order: back cube first (both cubes are side by side; x is nearer the camera on the right)
+      const ripple = 0.006 * Math.sin(t * 5.3) * (streamK > 0 ? 1 : 0.3);
+      waterBox(Pj, S.A.o, [S.A.s, Math.max(0, levelA * S.A.s + (levelA > 0.02 ? ripple : 0)), S.A.s], kWater * (levelA > 0.005 ? 1 : 0));
+      u.cube(c, Pj, { origin: S.A.o, size: S.A.s, color: teal, edge: '#9ff5ea', faceAlpha: 0.12, w: 3, jitter: 0.8, seed: boil * 7 + 100, alpha: cubeA, hiddenAlpha: 0.25 });
+      waterBox(Pj, S.X.o, [S.X.s, Math.min(S.X.s, Math.max(0, levelX * 1 + (levelX > 0.02 ? ripple : 0))), S.X.s], kWater * (levelX > 0.005 ? 1 : 0));
+      u.cube(c, Pj, { origin: S.X.o, size: S.X.s, color: teal, edge: '#9ff5ea', faceAlpha: 0.12, w: 3, jitter: 0.8, seed: boil * 11 + 300, alpha: cubeA, hiddenAlpha: 0.25 });
+
+      // pouring stream: glowing drops along an arc from the top of cube a to the top of cube x
+      if (streamK > 0.01) {
+        const p0 = Pj(cA[0], 0.02, cA[1]), p1 = Pj(cX[0], -1 + S.X.s + 0.04, cX[1]);
+        const cp = { x: (p0.x + p1.x) / 2, y: Math.min(p0.y, p1.y) - 170 };
+        c.save(); c.globalCompositeOperation = 'lighter'; c.globalAlpha = streamK * cubeA;
+        const n = 14, rr = u.rng(71);
+        for (let i = 0; i < n; i++) {
+          const off = rr(), sp = 0.75 + rr() * 0.5, sz = 0.9 + rr() * 0.9, wob = (rr() - 0.5) * 2;
+          const ph = ((t * 0.55 * sp + off) % 1); const q = 1 - ph;
+          const tx = 2 * q * (cp.x - p0.x) + 2 * ph * (p1.x - cp.x), ty = 2 * q * (cp.y - p0.y) + 2 * ph * (p1.y - cp.y); const L = Math.hypot(tx, ty) || 1;
+          const side = Math.sin(ph * 9 + i) * 9 * wob;                       // drops stray a little off the arc
+          const x = q * q * p0.x + 2 * q * ph * cp.x + ph * ph * p1.x - ty / L * side, y = q * q * p0.y + 2 * q * ph * cp.y + ph * ph * p1.y + tx / L * side;
+          const a = Math.sin(ph * Math.PI) * (0.6 + 0.4 * Math.sin(t * 6 + i * 2));
+          // teardrop stretched along the motion
+          u.ink(c, [{ x: x - tx / L * 14 * sz, y: y - ty / L * 14 * sz }, { x, y }], { w: 7 * sz, color: '#bff4ff', alpha: 0.7 * a, jitter: 0.3, seed: boil + i, taper: 0.7, step: 3 });
+          u.dab(c, x, y, 9 * sz, '#bff4ff', 0.5 * a, 0.25); u.dab(c, x, y, 3 * sz, '#ffffff', 0.9 * a, 0.5);
+        }
+        S.glow(c, p1.x, p1.y, 70, '#bff4ff', 0.35 * streamK); S.glow(c, p0.x, p0.y, 50, '#bff4ff', 0.25 * streamK);
+        c.restore();
+      }
+
+      // --- labels ---
+      const ea = bottomEdge(Pj, S.A.o, S.A.s), ex = bottomEdge(Pj, S.X.o, S.X.s);
+      const lab = (str, x, y, a, o = {}) => { if (a > 0.01) u.math(c, str, x, y, Object.assign({ size: 54, color: gold, alpha: a * cubeA, glow: 18 }, o)); };
+      lab('a', ea.mx, ea.my + 44, E.out(u.seg(t, 18.3, 19.0)));
+      lab('a³', ea.mx, ea.my + 102, E.out(u.seg(t, 18.9, 19.6)), { size: 50, color: ivory, glow: 12 });
+      lab('x', ex.mx, ex.my + 44, E.out(u.seg(t, 18.8, 19.5)));
+      // "?" beside x until the length is named (24.4) — the length that is hard to construct
+      const kQ = Math.min(E.out(u.seg(t, 19.4, 20.0)), 1 - E.io(u.seg(t, 24.2, 24.9))); const qb = 0.7 + 0.3 * (0.5 + 0.5 * Math.sin(t * 2.2));
+      lab('= ?', ex.mx + 62, ex.my + 44, kQ * qb, { align: 'left', color: '#ffe9a8' });
+      // volume marks on cube x at the water line: a³ after pour 1, 2a³ after pour 2
+      const waterLab = (str, level, a, o = {}) => { if (a <= 0.01) return; const p = Pj(S.X.o[0] + S.X.s, S.X.o[1] + level, S.X.o[2] + S.X.s); const q = Pj(S.X.o[0] + S.X.s, S.X.o[1] + level, S.X.o[2]); const r = p.x > q.x ? p : q; lab(str, r.x + 30, r.y, a, Object.assign({ align: 'left' }, o)); };
+      const L1 = 1 / (S.X.s * S.X.s), kL1 = Math.min(E.out(u.seg(t, 24.8, 25.4)), 1 - E.io(u.seg(t, 28.3, 28.8)));
+      waterLab('a³', L1, kL1, { color: '#bff4ff', glow: 16, size: 50 });
+      const kL2 = E.out(u.seg(t, 28.5, 29.1)), pulse = 1 + 0.08 * Math.sin((t - 28.5) * 5) * (1 - u.seg(t, 28.5, 30.5));
+      waterLab('2a³', S.X.s, kL2, { color: '#ffe9a8', glow: 26, size: 58 * pulse });
+      // refill flash on cube a (second a³)
+      const kf = 1 - u.seg(t, S.refill[0], S.refill[1] + 0.4); if (t >= S.refill[0] && kf > 0) { const q = Pj(cA[0], -0.5, cA[1]); S.glow(c, q.x, q.y, 170, '#dffffb', 0.45 * kf * kf * cubeA); }
+
+      // --- ruler-and-compass attempts that get erased (19.6–24.2): the length resists construction ---
+      [[19.6, 1], [21.9, 2]].forEach(([t0, k]) => {
+        const kd = E.out(u.seg(tq, t0, t0 + 0.9)), ke = 1 - E.io(u.seg(t, t0 + 1.6, t0 + 2.2)); const a = Math.min(kd > 0 ? 1 : 0, ke) * cubeA * 0.55;
+        if (a <= 0.01 || kd <= 0) return;
+        const cx0 = 330 + k * 40, cy0 = 300, r = 118 - k * 12, a0 = -2.6 + k * 0.4, a1 = a0 + 2.4 * kd;
+        u.sketch(c, u.ellipsePts(cx0, cy0, r, r, 28, 0, a0, a1), { passes: 2, w: 2.2, jitter: 2.2, seed: boil * 3 + 900 + k, alpha: a, color: ivory });
+        const kl = E.out(u.seg(tq, t0 + 0.45, t0 + 0.9)); if (kl > 0) u.sketch(c, [{ x: cx0 - r * 1.1, y: cy0 + 44 }, { x: cx0 - r * 1.1 + (r * 2.3) * kl, y: cy0 + 40 - k * 6 }], { passes: 2, w: 2.2, jitter: 2, seed: boil * 3 + 920 + k, alpha: a, color: ivory });
+        // compass pivot (pencil dot) and a faint radius line to the arc
+        u.dab(c, cx0, cy0, 5, ivory, a * 0.9, 0.5);
+        u.sketch(c, [{ x: cx0, y: cy0 }, { x: cx0 + r * Math.cos(a1), y: cy0 + r * Math.sin(a1) }], { passes: 1, w: 1.6, jitter: 1.5, seed: boil * 3 + 940 + k, alpha: a * 0.6, color: ivory });
+      });
+
+      // --- formulas (typed at 12 fps, left-aligned from the centred origin) ---
+      const typed = (str, w, y, p, size, color, glowK, a) => { if (p <= 0 || a <= 0.01) return; const s = u.typed(str, p); u.math(c, s, W / 2 - w / 2, y, { size, color, align: 'left', alpha: a * cubeA, glow: glowK }); if (p < 1) { const cw = u.math(c, s, -9999, -9999, { size, alpha: 0 }); S.glow(c, W / 2 - w / 2 + cw + 6, y, 26, '#fff6d0', 0.5 * a * cubeA); } };
+      typed(S.F.f1, S.w.f1, 112, E.sine(u.seg(tq, 19.2, 21.4)), 66, gold, 22, 1);
+      typed(S.F.f2, S.w.f2, 196, E.sine(u.seg(tq, 22.0, 24.0)), 60, gold, 18, 1);
+      const k3 = E.out(u.seg(t, 24.4, 25.1)); if (k3 > 0.01) u.math(c, S.F.f3, W / 2, 270, { size: 50, color: ivory, alpha: k3 * cubeA, glow: 12 });
+
+      /* helpers for this beat */
+      function waterBox(Pj, o, d, a) {
+        if (a <= 0.01 || d[1] <= 0.002) return;
+        const [x, y, z] = o, [w, h, dp] = d;
+        const V = [[x, y, z], [x + w, y, z], [x + w, y + h, z], [x, y + h, z], [x, y, z + dp], [x + w, y, z + dp], [x + w, y + h, z + dp], [x, y + h, z + dp]].map(v => Pj(v[0], v[1], v[2]));
+        const F = [[0, 1, 2, 3], [4, 5, 6, 7], [0, 1, 5, 4], [3, 2, 6, 7], [0, 3, 7, 4], [1, 2, 6, 5]];
+        const faces = F.map((f, i) => { const pts = f.map(k => V[k]); return { pts, i, depth: pts.reduce((s, p) => s + p.z, 0) / 4 }; }).sort((p, q) => q.depth - p.depth);
+        c.save();
+        faces.forEach((f, k) => {
+          const front = k >= 3; const top = f.i === 3;
+          if (top) { // boiling water surface, lighter
+            u.shape(c, f.pts, { fill: '#a9ecff', jitter: 1.6, seed: boil * 3 + 77, alpha: a * (front ? 0.5 : 0.25) });
+            if (front) u.ink(c, [...f.pts, f.pts[0]], { w: 2, color: '#dffaff', jitter: 1.2, seed: boil * 5 + 78, alpha: a * 0.6, taper: 0, closed: true });
+          } else { c.globalAlpha = a * (front ? 0.34 : 0.16); c.fillStyle = '#3fb8e6'; u.polyPath(c, f.pts, true); c.fill(); }
+        });
+        c.restore();
+      }
+      function bottomEdge(Pj, o, s) {
+        const cs = [[o[0], o[1], o[2]], [o[0] + s, o[1], o[2]], [o[0] + s, o[1], o[2] + s], [o[0], o[1], o[2] + s]].map(v => Pj(v[0], v[1], v[2]));
+        let k = 0; cs.forEach((p, i) => { if (p.y > cs[k].y) k = i; });
+        const a = cs[k], n1 = cs[(k + 1) % 4], n2 = cs[(k + 3) % 4];
+        const b = Math.hypot(n1.x - a.x, n1.y - a.y) > Math.hypot(n2.x - a.x, n2.y - a.y) ? n1 : n2;
+        return { a, b, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
+      }
+    }
+
+    /* -------------------------------- beat B: Hippocrates' proportion (31.3–40) */
+    if (t >= 31.0) {
+      const kPropOut = 1 - E.io(u.seg(t, 37.8, 38.9));
+      // proportion typed at centre
+      const pP = E.sine(u.seg(tq, 31.3, 34.3));
+      if (pP > 0 && kPropOut > 0.01) {
+        const s = u.typed(S.F.prop, pP); const x0 = W / 2 - S.w.prop / 2;
+        u.math(c, s, x0, 250, { size: 76, color: gold, align: 'left', alpha: kPropOut, glow: 26 });
+        if (pP < 1) { const cw = u.math(c, s, -9999, -9999, { size: 76, alpha: 0 }); S.glow(c, x0 + cw + 8, 250, 30, '#fff6d0', 0.5); }
+      }
+      // four glowing segments a, x, y, 2a
+      const xs = W / 2 - 400, rows = [430, 535, 640, 745];
+      let flowAny = 0;
+      S.segs.forEach((sg, i) => {
+        const kd = E.out(u.seg(t, sg.t0, sg.t0 + 0.6)); if (kd <= 0.001) return;
+        const len = sg.len * S.unit * kd;
+        // flow out (38.0–): one after another the segments stream off to the right, carrying their labels
+        const kFlow = E.in(u.seg(t, 38.0 + i * 0.22, 39.9 + i * 0.22)); flowAny = Math.max(flowAny, kFlow);
+        const y = rows[i] - 70 * kFlow, dx = kFlow * 1900, a = 1 - 0.3 * kFlow;
+        const pulse = 0.85 + 0.15 * Math.sin(t * 2.4 - i * 0.9); const col = i % 2 ? gold : teal;
+        if (kFlow > 0.01) { // comet tail behind the moving segment
+          c.save(); c.globalCompositeOperation = 'lighter';
+          u.ink(c, [{ x: xs + dx - 420 * kFlow, y: y + 2 }, { x: xs + dx + 10, y }], { w: 22, color: u.alpha(col, 0.22 * kFlow), jitter: 1.5, seed: boil * 3 + i, taper: 0.9, step: 8 });
+          c.restore();
+        }
+        u.glowLine(c, [{ x: xs + dx, y }, { x: xs + dx + len, y }], { color: col, w: 6, halo: 30, alpha: a * pulse, seed: boil * 3 + i * 17, jitter: 0.5 });
+        // end ticks
+        [xs + dx, xs + dx + len].forEach((tx, k) => u.ink(c, [{ x: tx, y: y - 16 }, { x: tx, y: y + 16 }], { w: 3.2, color: i % 2 ? '#ffe9a8' : '#c8fff8', alpha: a * (k ? kd : 1), jitter: 0.5, seed: boil * 5 + i * 7 + k, taper: 0.3 }));
+        const kl = Math.min(1, kd * 1.6);
+        if (kl > 0.01) u.math(c, sg.lab, xs + dx - 46, y, { size: 52, color: i % 2 ? gold : '#c8fff8', align: 'right', alpha: kl * a, glow: 16 });
+      });
+      // ratio marks between consecutive rows: each length is the previous × ∛2
+      const kR = E.out(u.seg(t, 36.9, 37.6)) * (1 - E.io(u.seg(t, 37.9, 38.4)));
+      if (kR > 0.01) for (let i = 0; i < 3; i++) {
+        const x = xs + Math.max(S.segs[i].len, S.segs[i + 1].len) * S.unit + 70, y = (rows[i] + rows[i + 1]) / 2;
+        u.ink(c, u.curve([{ x: x - 30, y: y - 34 }, { x: x - 14, y }, { x: x - 30, y: y + 34 }], 6), { w: 2.4, color: ivory, alpha: 0.55 * kR, jitter: 0.8, seed: boil * 7 + i * 3, taper: 0.3 });
+        u.math(c, '× ∛2', x, y, { size: 40, color: ivory, align: 'left', alpha: 0.85 * kR, glow: 10 });
+      }
+    }
+  },
+});
+
+
+/* ===== src/scenes/s04.js ===== */
+/* ============================================================================
+   S04 — 메나이크모스의 새로운 발상 (global 120–160 s, local 0–40)
+   Hybrid: painted plates D01 → D02 → D03 + camera (slow Ken Burns) + living
+   light (lamp flame/pool, window stars twinkling, moon-path sparkle, dust),
+   one brief hand-drawn gold "section curve" over the hand-held cone, and a
+   translucent teal wireframe cone that rises from the window-sill cone toward
+   the frame centre while the room dissolves toward the navy math space (S05).
+   No procedural people, no modern coordinates/symbols, no text.
+
+   Timing map (scene-local seconds; global = local + 120):
+     0.0–14.2  D01 night study, zoom 1.00→1.10 toward the cones on the table
+                 lamp flame + pool (0.095,0.74), window stars twinkle, sea sparkle
+                 in the window, warm dust motes
+     3.0–11.5    sub: 시간이 흘러… 새로운 곡선들을 연구했습니다 (engine)
+    13.0–14.2    dissolve D01→D02 (1.2 s)
+    13.0–30.6  D02 hand + cone close-up, zoom 1.04→1.14 toward the cone
+                 big lamp flame (0.16,0.17) + pool + thin smoke, motes
+    14.0–21.0    sub: 원뿔을 평면으로 잘랐을 때 나타나는 곡선들 (engine)
+    16.4–21.9    gold section curve traces itself around the cone (16.4–17.8),
+                 holds at ≈0.3 alpha with a faint sheen, fades 20.9–21.9
+    23.0–30.5    caption (engine, bottom-left)
+    29.4–30.6    dissolve D02→D03 (1.2 s)
+    29.4–40.0  D03 window at night, zoom 1.00→1.08 toward the sky/cone
+                 stars twinkle (upper right), lamp (0.08,0.72), moon path sparkle
+    30.5–38.8    sub: …그는 질문을 바꾸었습니다 (engine)
+    32.0–40.0    teal light blooms from the sill cone (0.69,0.75)
+    34.5–40.0    translucent teal wireframe cone rises from the sill cone to the
+                 centre (y≈470), growing, slow yaw; room grades teal and the
+                 navy math layer dissolves in (→0.6 at 40) — hand-off to S05
+   ========================================================================== */
+ANIM.scene({
+  id: 's04', title: '메나이크모스의 새로운 발상',
+  start: ANIM.TIMES.s04[0], end: ANIM.TIMES.s04[1],
+  mood: t => (t < 30 ? 'ancient' : 'rise'),
+  fadeIn: 0.9, fadeOut: 0.9,
+
+  init(api, S) {
+    const { u, W, H } = api; const P = ANIM.paint;
+    S.beats = [
+      { id: 'D01', t0: 0.0, t1: 14.2, fade: 1.0 },
+      { id: 'D02', t0: 13.0, t1: 30.6, fade: 1.2 },
+      { id: 'D03', t0: 29.4, t1: 40.0, fade: 1.2 },
+    ];
+    S.has = { flame: !!(P && P.flame), lampFlicker: !!(P && P.lampFlicker), smoke: !!(P && P.smoke), sparkle: !!(P && P.seaSparkle), particles: !!(P && P.particles) };
+    // navy math space (for the hand-off dissolve at the end) — built once
+    S.navy = u.layer(W, H, c => {
+      P.sky(c, { preset: 'navyMath', seed: 44, horizon: H * 1.05, clouds: false });
+      P.nebula(c, { seed: 53, alpha: 0.8, count: 11, colors: ['#1f3f6e', '#2a2a66', '#1c4d58', '#3a2f66'] });
+      P.stars(c, { seed: 61, count: 150, yMax: H, alpha: 0.55 });
+      u.paper(c, 0.14);
+    });
+    // cached big glows (one drawImage per frame instead of large radial fills)
+    S.tealL = u.layer(900, 900, c => { u.glow(c, 450, 450, 440, '#58e0d0', 0.55); u.glow(c, 450, 450, 180, '#bffff5', 0.5); });
+    S.warmL = u.layer(900, 900, c => { u.glow(c, 450, 450, 440, '#ffb640', 0.5); u.glow(c, 450, 450, 190, '#ffd98a', 0.4); });
+    // deterministic twinkling stars (positions in 0..1 of a box)
+    const mkStars = (seed, n) => { const r = u.rng(seed); const o = []; for (let i = 0; i < n; i++) o.push({ x: r(), y: r(), ph: r() * 6.28, f: 0.6 + r() * 1.6, s: 0.6 + r() * 1.0 }); return o; };
+    S.starsD01 = mkStars(71, 14);
+    S.starsD03 = mkStars(73, 26);
+    // the teal cone (apex at origin, opens toward -y)
+    S.cone = { alpha: 0.46, h: 2.6 };
+  },
+
+  draw(api, t, S) {
+    const { ctx: c, u, W, H } = api; const P = ANIM.paint; const E = u.ease; const boil = api.boil;
+
+    /* ---------------------------------------------------------- helpers */
+    const breathe = (speed, seed) => 0.85 + 0.15 * u.noise2(t * speed + seed * 5.3, seed);
+    const layerAt = (L, x, y, s, alpha) => { if (alpha <= 0.002) return; c.save(); c.globalAlpha *= alpha; c.drawImage(L, x - 450 * s, y - 450 * s, 900 * s, 900 * s); c.restore(); };
+    // twinkling stars inside a frame box (lighter): slow sinusoidal brightness, 12 fps hold
+    const twinkle = (list, box, size, alpha, color = '#fff6dc') => {
+      const tq = api.tq; c.save(); c.globalCompositeOperation = 'lighter';
+      for (const s of list) {
+        const k = 0.5 + 0.5 * Math.sin(tq * s.f + s.ph); const a = alpha * (0.15 + 0.85 * k * k);
+        const x = box[0] + s.x * box[2], y = box[1] + s.y * box[3], r = size * s.s * (0.8 + 0.5 * k);
+        u.dab(c, x, y, r * 2.6, color, a * 0.35, 0.1); u.dab(c, x, y, r, color, a, 0.5);
+      }
+      c.restore();
+    };
+    // lamp: boiling flame + flickering warm pool at a plate point
+    const lamp = (R, fx, fy, scale, pool, seed, alpha = 1) => {
+      const p = u.platePt(R, fx, fy);
+      if (S.has.lampFlicker) P.lampFlicker(c, t, { x: p.x, y: p.y, scale, seed, pool, alpha });
+      else { u.lamp(c, p.x, p.y - 10 * scale, pool * scale, t, { seed, alpha: 0.3 * alpha }); }
+      return p;
+    };
+
+    /* ------------------------------------------------------------ beats */
+    // D01 — night study: lamp, window stars, moonlit sea sparkle, dust (0–14.2)
+    function D01(a) {
+      const kb = u.kb(t, 0, 14.2, { zoom: 1.0, fx: 0.5, fy: 0.5 }, { zoom: 1.10, fx: 0.44, fy: 0.58 });
+      const R = u.plate(c, 'D01', Object.assign(kb, { alpha: a })); if (!R) return;
+      const sz = R.w / W;
+      c.save(); c.globalAlpha = a;
+      // 1. window: twinkling stars + faint moon-path sparkle on the sea (clipped to the window opening)
+      const win = [u.platePt(R, 0.595, 0.02), u.platePt(R, 0.905, 0.02), u.platePt(R, 0.905, 0.33), u.platePt(R, 0.595, 0.33)];
+      c.save(); u.polyPath(c, win, true); c.clip();
+      twinkle(S.starsD01, [win[0].x, win[0].y, win[1].x - win[0].x, 0.19 * R.h], 1.5 * sz, 0.8);
+      c.restore();
+      // 2. the clay lamp: boiling flame + warm pool breathing over the table and his hands
+      const lp = lamp(R, 0.095, 0.745, 1.35 * sz, 300 * sz, 31, 0.85);
+      layerAt(S.warmL, lp.x + 0.06 * R.w, lp.y - 0.05 * R.h, 0.9 * sz * breathe(6, 3), 0.22);
+      // 3. warm dust drifting in the lamplight
+      u.motes(c, t, { count: 26, box: [R.x + 0.02 * R.w, R.y + 0.45 * R.h, 0.5 * R.w, 0.5 * R.h], seed: 9, color: '#ffe3a0', size: 2.2 * sz, speed: 0.45, alpha: 0.3, drift: 0.7 });
+      u.grade(c, '#ffd9a0', 0.06);
+      c.restore();
+    }
+
+    // D02 — hand holding the cone: big lamp flame, thin smoke, motes, gold section curve (13–30.6)
+    function D02(a) {
+      const kb = u.kb(t, 13, 30.6, { zoom: 1.04, fx: 0.42, fy: 0.42 }, { zoom: 1.14, fx: 0.39, fy: 0.40 });
+      const R = u.plate(c, 'D02', Object.assign(kb, { alpha: a })); if (!R) return;
+      const sz = R.w / W;
+      c.save(); c.globalAlpha = a;
+      // 1. lamp: boiling flame over the painted one + flickering pool; a thread of smoke above
+      const lp = lamp(R, 0.158, 0.19, 2.3 * sz, 360 * sz, 37, 0.8);
+      if (S.has.smoke) P.smoke(c, t, { x: lp.x + 4 * sz, y: lp.y - 0.17 * R.h, seed: 41, scale: 0.55 * sz, alpha: 0.16, color: '#d9d0c8', count: 6, rise: 0.22 * R.h, wind: 0.35 });
+      // 2. dust motes in the lamplight
+      u.motes(c, t, { count: 22, box: [R.x, R.y + 0.05 * R.h, 0.7 * R.w, 0.7 * R.h], seed: 13, color: '#ffe3a0', size: 2.4 * sz, speed: 0.4, alpha: 0.26, drift: 0.6 });
+      // 3. the imagined cut: a faint gold curve traces itself around the cone, holds, fades (16.4–21.9)
+      goldCurve(R, sz);
+      u.grade(c, '#ffd9a0', 0.05);
+      c.restore();
+    }
+
+    // the brief gold section-curve overlay over the hand-held cone (image-fraction geometry; approximate placement is fine)
+    function goldCurve(R, sz) {
+      const kIn = E.out(u.seg(t, 16.4, 17.8)), kOut = 1 - E.io(u.seg(t, 20.9, 21.9)); if (kIn <= 0 || kOut <= 0) return;
+      const A = u.platePt(R, 0.327, 0.262), B = u.platePt(R, 0.392, 0.478);       // apex → base centre (painted cone axis)
+      let dx = B.x - A.x, dy = B.y - A.y; const L = Math.hypot(dx, dy) || 1; dx /= L; dy /= L; const nx = -dy, ny = dx;
+      const f = 0.55;                                                               // cut at 55 % of the height (above the fingers)
+      const C = { x: A.x + dx * L * f, y: A.y + dy * L * f };
+      const w = 0.058 * R.w * f, k = 0.46;                                          // half-width at the cut, foreshortening of the ellipse
+      const tilt = 0.20;                                                            // slightly oblique cut → ellipse
+      const pt = th => ({ x: C.x + nx * w * Math.cos(th) + dx * w * (k * Math.sin(th) + tilt * Math.cos(th)), y: C.y + ny * w * Math.cos(th) + dy * w * (k * Math.sin(th) + tilt * Math.cos(th)) });
+      const n = 48; const near = [], far = [];
+      for (let i = 0; i <= n; i++) near.push(pt((i / n) * Math.PI));              // sin>0: side toward the base (facing us)
+      for (let i = 0; i <= n; i++) far.push(pt(Math.PI + (i / n) * Math.PI));
+      // trace progressively: near half first, then the far (hidden) half
+      const pN = u.clamp(kIn * 1.6), pF = u.clamp(kIn * 1.6 - 0.6);
+      const sl = (arr, p) => arr.slice(0, Math.max(2, Math.round(p * (arr.length - 1)) + 1));
+      const gold = '#f3d27a', alpha = 0.55 * kOut;
+      c.save(); c.globalCompositeOperation = 'lighter';
+      u.glow(c, C.x, C.y, w * 1.8, '#f3d27a', 0.2 * kIn * kOut * breathe(3, 9));
+      if (pN > 0.02) u.ink(c, sl(near, pN), { w: 22 * sz, color: u.alpha(gold, 0.12), jitter: 0.6, seed: boil * 3 + 11, taper: 0, step: 4 });
+      c.restore();
+      if (pN > 0.02) { u.ink(c, sl(near, pN), { w: 5 * sz, color: gold, alpha, jitter: 0.7, seed: boil * 3 + 11, taper: 0.15, step: 4 }); u.ink(c, sl(near, pN), { w: 1.8 * sz, color: '#fff3c4', alpha: alpha * 0.85, jitter: 0.5, seed: boil * 3 + 12, taper: 0.15, step: 4 }); }
+      if (pF > 0.02) u.ink(c, sl(far, pF), { w: 3 * sz, color: gold, alpha: alpha * 0.45, jitter: 0.7, seed: boil * 3 + 13, taper: 0.15, step: 4 });
+    }
+
+    // D03 — looking up at the stars; teal light blooms from the sill cone, wireframe cone rises (29.4–40)
+    function D03(a) {
+      const kb = u.kb(t, 29.4, 40, { zoom: 1.0, fx: 0.5, fy: 0.5 }, { zoom: 1.08, fx: 0.55, fy: 0.46 });
+      const R = u.plate(c, 'D03', Object.assign(kb, { alpha: a })); if (!R) return;
+      const sz = R.w / W;
+      c.save(); c.globalAlpha = a;
+      // 1. night sky: twinkling stars (upper right, between the pillars) + moon path on the sea
+      const sky = [u.platePt(R, 0.47, 0.0), u.platePt(R, 0.90, 0.0), u.platePt(R, 0.90, 0.56), u.platePt(R, 0.47, 0.56)];
+      c.save(); u.polyPath(c, sky, true); c.clip();
+      twinkle(S.starsD03, [sky[0].x, sky[0].y, sky[1].x - sky[0].x, 0.42 * R.h], 1.6 * sz, 0.85);
+      if (S.has.sparkle) P.seaSparkle(c, t, { horizonY: u.platePt(R, 0, 0.575).y, bottom: u.platePt(R, 0, 0.66).y, seed: 7, count: 22, x: u.platePt(R, 0.735, 0).x, spread: 0.06 * R.w, alpha: 0.55, color: '#dfe9ff' });
+      c.restore();
+      // 2. the small lamp on the shelf (left)
+      lamp(R, 0.082, 0.728, 1.0 * sz, 220 * sz, 43, 0.8);
+      u.motes(c, t, { count: 14, box: [R.x, R.y + 0.4 * R.h, 0.3 * R.w, 0.5 * R.h], seed: 15, color: '#ffe3a0', size: 2.0 * sz, speed: 0.4, alpha: 0.25, drift: 0.6 });
+      // 3. teal light blooming from the bronze cone on the sill (32→)
+      const cp = u.platePt(R, 0.69, 0.75); const kT = E.io(u.seg(t, 32, 36.5));
+      if (kT > 0) {
+        const br = 0.9 + 0.1 * Math.sin(t * 2.3);
+        layerAt(S.tealL, cp.x, cp.y - 0.03 * R.h, (0.35 + 0.55 * kT) * sz * br, (0.25 + 0.55 * kT) * br);
+        if (S.has.particles) P.particles(c, t, { kind: 'glint', count: 12, box: [cp.x - 0.12 * R.w, cp.y - 0.28 * R.h, 0.24 * R.w, 0.32 * R.h], seed: 67, size: 1.0 * sz, speed: 0.7, alpha: 0.7 * kT, color: '#bffff5' });
+        u.motes(c, t, { count: 30, box: [cp.x - 0.14 * R.w, cp.y - 0.45 * R.h, 0.28 * R.w, 0.5 * R.h], seed: 69, color: '#9ff5ea', size: 2.4 * sz, speed: 0.8, alpha: 0.5 * kT, drift: 0.8 });
+      }
+      c.restore();
+      S._sill = u.platePt(R, 0.692, 0.745);   // mid-height of the painted bronze cone (apex ≈0.675, base ≈0.81)
+      S._sillSz = sz;
+    }
+
+    const FN = { D01, D02, D03 };
+
+    /* ------------------------------------------------- beat sequencing */
+    let drawn = 0;
+    for (const b of S.beats) {
+      if (t < b.t0 || t > b.t1) continue;
+      const a = drawn === 0 ? 1 : E.sine(u.seg(t, b.t0, b.t0 + b.fade));
+      if (a <= 0.001) continue;
+      FN[b.id](a); drawn++;
+    }
+    if (!drawn) { c.fillStyle = '#101a33'; c.fillRect(0, 0, W, H); }
+
+    /* ----------------------------------- hand-off: navy space + rising teal cone (34.5–40) */
+    const kRise = E.io(u.seg(t, 34.5, 39.6));
+    if (kRise > 0) {
+      // the room cools toward the math space
+      u.grade(c, '#58e0d0', 0.12 * kRise, 'soft-light');
+      c.save(); c.globalAlpha = 0.6 * E.io(u.seg(t, 36, 40)); c.drawImage(S.navy, 0, 0); c.restore();
+      // the model lifts off the sill, grows and turns as it becomes a translucent teal cone
+      // starts exactly over the painted cone (same size), then lifts toward the centre and grows
+      const sill = S._sill || { x: W * 0.692, y: H * 0.745 }, ssz = S._sillSz || 1;
+      const cx = u.lerp(sill.x, W * 0.5, kRise), cy = u.lerp(sill.y, 470, kRise);
+      const fov = u.lerp(610 * ssz, 1500, kRise), yaw = 0.2 + (t - 34.5) * 0.3, pitch = 0.3;
+      const { alpha: ca, h } = S.cone;
+      const Pj = u.camera({ yaw, pitch, dist: 9, fov, cx, cy, target: [0, -h * 0.5, 0] });
+      const co = u.coneOutline(Pj, ca, h, [0, 0, 0], 96);
+      const kA = E.out(u.seg(t, 34.5, 36.5));
+      c.save(); c.globalAlpha = kA;
+      // body (translucent) + base disc
+      c.fillStyle = u.alpha('#58e0d0', 0.14); u.polyPath(c, co.outline, true); c.fill();
+      c.fillStyle = u.alpha('#58e0d0', 0.10); u.polyPath(c, co.ring, true); c.fill();
+      // glowing silhouette lines, far arc fainter (behind), near arc bright
+      const j = 0.7;
+      u.ink(c, co.farArc, { w: 2.2, color: '#9ff5ea', alpha: 0.35, jitter: j, seed: boil * 5 + 21, taper: 0, step: 5 });
+      u.glowLine(c, co.nearArc, { color: '#58e0d0', w: 3.2, halo: 16, alpha: 0.95, seed: boil * 5 + 22, jitter: j });
+      u.glowLine(c, [co.apex2d, co.sil[0]], { color: '#58e0d0', w: 3.2, halo: 16, alpha: 0.95, seed: boil * 5 + 23, jitter: j });
+      u.glowLine(c, [co.apex2d, co.sil[1]], { color: '#58e0d0', w: 3.2, halo: 16, alpha: 0.95, seed: boil * 5 + 24, jitter: j });
+      u.glow(c, co.apex2d.x, co.apex2d.y, 30 + 70 * kRise, '#bffff5', 0.35);
+      c.restore();
+      u.motes(c, t, { count: 24, box: [cx - 260, cy - 320, 520, 640], seed: 77, color: '#9ff5ea', size: 2.4, speed: 0.5, alpha: 0.35 * kRise, drift: 0.8 });
+      // the physical model on the sill dims as the idea leaves it
+      layerAt(S.tealL, sill.x, sill.y, 0.5 * ssz, 0.35 * kRise);
+    }
+  },
+});
+
+
+/* ===== src/scenes/s05.js ===== */
+/* ============================================================================
+   S05 — 원뿔 속에 숨겨진 곡선들 (global 160–200 s, local 0–40)
+   Entirely in the navy math space (painted navyMath sky + nebula + stars +
+   paper, built once in init). Menaechmus' construction: three cones with
+   different apex angles (60° acute / 90° right / 120° obtuse) are each cut by
+   a pale-gold plane PERPENDICULAR TO A GENERATOR. The section (exact
+   u.coneSection) is drawn as a glowing curve, then plane + curve detach,
+   rotate rigidly (axis–angle interpolation) and come to the front as a flat
+   2D curve (u.planeBasis coordinates), labelled 타원 / 포물선 / 쌍곡선.
+   The hyperbola uses a double cone (double:true) and shows both branches.
+   No plates, no procedural people. All lines boil (seed = api.boil).
+
+   Timing map (scene-local seconds; global = local + 160):
+     0.0– 2.5  the translucent teal cone from S04 keeps turning at centre
+     2.5– 5.0  it becomes the right cone; acute & obtuse cones emerge to
+               the left / right  →  row of three cones (slots 400/960/1520)
+     3.0– 9.5    sub: 원뿔과 평면이 만나면 … 서로 다른 모양의 곡선이 (engine)
+     5.2– 9.0  row labels 예각/직각/둔각 원뿔 + apex-angle arcs (꼭지각 60°/90°/120°)
+     9.0–10.5  acute cone slides to the stage (600,520); others fade
+    10.0–19.0  BEAT 1 타원     (beat-local τ: 0.4–1.0 generator line,
+    19.0–28.0  BEAT 2 포물선    1.0–2.5 plane slides in, 2.5–3.5 section curve
+    28.0–37.0  BEAT 3 쌍곡선    draws, 3.8–6.3 unfold to the front (right side),
+                               6.0–7.1 label + description, 8.3–9.0 fade)
+    26.5–31.0   sub: 단순히 아름다운 모양이 아니었습니다 (engine)
+    32.0–39.3   sub: 수학적 도구였습니다 (engine)
+    36.5–38.0  hyperbola panel glides to slot 3; ellipse & parabola panels
+               fade in at slots 1–2  →  37–40 three curves side by side + labels
+   ========================================================================== */
+ANIM.scene({
+  id: 's05', title: '원뿔 속에 숨겨진 곡선들',
+  start: ANIM.TIMES.s05[0], end: ANIM.TIMES.s05[1],
+  mood: 'rise',
+  fadeIn: 0.9, fadeOut: 0.9,
+
+  init(api, S) {
+    const { u, W, H } = api; const P = ANIM.paint; const DEG = Math.PI / 180;
+    /* ---------------------------------------------------- background layer */
+    S.navy = u.layer(W, H, c => {
+      P.sky(c, { preset: 'navyMath', seed: 55, horizon: H * 1.05, clouds: false });
+      P.nebula(c, { seed: 59, alpha: 0.8, count: 12, colors: ['#1f3f6e', '#2a2a66', '#1c4d58', '#3a2f66'] });
+      P.stars(c, { seed: 67, count: 150, yMax: H, alpha: 0.55 });
+      u.paper(c, 0.14);
+    });
+    // twinkling stars (positions 0..1 of the frame)
+    { const r = u.rng(91); S.twk = []; for (let i = 0; i < 34; i++) S.twk.push({ x: r(), y: r() * 0.85, ph: r() * 6.28, f: 0.5 + r() * 1.4, s: 0.6 + r() }); }
+    // cached glow sprites (one drawImage instead of a big radial fill)
+    S.spr = {};
+    S.glow = (c, x, y, r, color, alpha = 0.6) => {
+      let s = S.spr[color];
+      if (!s) s = S.spr[color] = u.layer(256, 256, cc => { const g = cc.createRadialGradient(128, 128, 0, 128, 128, 128); g.addColorStop(0, color); g.addColorStop(0.35, u.alpha(color, 0.5)); g.addColorStop(1, u.alpha(color, 0)); cc.fillStyle = g; cc.fillRect(0, 0, 256, 256); });
+      c.save(); c.globalAlpha *= alpha; c.drawImage(s, x - r, y - r, r * 2, r * 2); c.restore();
+    };
+
+    /* --------------------------------------------------------- camera base */
+    S.PITCH = 0.3; S.DIST = 9;
+    S.yawAt = t => 1.85 + 0.05 * t;                     // continues S04's final yaw, very slow orbit
+    S.STAGE = { cx: 600, cy: 520 };                     // where the active cone sits during a beat
+    S.PANEL = { x: 1400, y: 440 };                      // where the unfolded 2D curve comes to rest
+    S.SLOTS = [{ x: 400, y: 430 }, { x: 960, y: 430 }, { x: 1520, y: 430 }];   // final side-by-side
+
+    /* ---------------------------------------------------------- the cones */
+    // apex at origin, opening toward -y. hUp>0 = upper nappe (double cone)
+    S.cones = [
+      { id: 0, name: '예각 원뿔', ang: '꼭지각 60°', alpha: 30 * DEG, h: 2.25, hUp: 0, fovBeat: 1500 },
+      { id: 1, name: '직각 원뿔', ang: '꼭지각 90°', alpha: 45 * DEG, h: 1.63, hUp: 0, fovBeat: 1400 },
+      { id: 2, name: '둔각 원뿔', ang: '꼭지각 120°', alpha: 60 * DEG, h: 1.25, hUp: 1.25, fovBeat: 1250 },
+    ];
+    S.s04cone = { alpha: 0.46, h: 2.6, hUp: 0 };        // the cone that rose at the end of S04
+
+    /* ---------------------------------------------------- beats (exact math) */
+    const V = { add: (a, b, k = 1) => [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k], dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2], cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]], norm: a => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; }, scale: (a, k) => [a[0] * k, a[1] * k, a[2] * k] };
+    S.V = V;
+    // facing basis of the camera (screen-right, screen-up, normal) as world vectors
+    S.facingBasis = (yaw, pitch) => { const xr = [Math.cos(yaw), 0, -Math.sin(yaw)]; const yu = [-Math.sin(pitch) * Math.sin(yaw), Math.cos(pitch), -Math.sin(pitch) * Math.cos(yaw)]; return { xr, yu, N: V.cross(xr, yu) }; };
+    S.beats = [
+      { id: 'ellipse', cone: 0, t0: 10, name: '타원', desc: '닫힌 곡선', yp: -0.95, orient: 'ex', type: 'ellipse' },
+      { id: 'parabola', cone: 1, t0: 19, name: '포물선', desc: '한 방향으로 무한히 뻗는 곡선', yp: -0.75, orient: 'ey', type: 'parabola' },
+      { id: 'hyperbola', cone: 2, t0: 28, name: '쌍곡선', desc: '서로 분리된 두 갈래', yp: -0.42, orient: 'ex', type: 'hyperbola', double: true },
+    ];
+    for (const b of S.beats) {
+      const K = S.cones[b.cone]; const al = K.alpha; b.t1 = b.t0 + 9;
+      // generator chosen so that, mid-cut, it faces the camera's front-right (plane clearly visible, not edge-on)
+      const yawMid = S.yawAt(b.t0 + 3.2); const th = -yawMid - Math.PI / 4 - 0.15;
+      const g = [Math.sin(al) * Math.cos(th), -Math.cos(al), Math.sin(al) * Math.sin(th)];        // unit generator direction
+      const s = -b.yp / Math.cos(al);                                                              // distance along the generator to the cut point
+      const p = V.scale(g, s);
+      b.g = g; b.s = s; b.p = p; b.genLen = Math.max(K.h, K.hUp) / Math.cos(al);
+      b.plane = { p, nrm: g };                                                                     // plane ⟂ generator through p
+      b.typeCheck = u.conicType(al, g);
+      if (b.typeCheck !== b.type) console.warn('S05: conic type mismatch', b.id, b.typeCheck);
+      b.branches = u.coneSection({ alpha: al, h: Math.max(K.h, K.hUp), double: !!b.double, plane: b.plane, n: 360 });
+      // in-plane axis direction (lies in the axial plane, ⟂ g), pointing from p INTO the cone (downward)
+      const d = [-Math.cos(al) * Math.cos(th), -Math.sin(al), -Math.cos(al) * Math.sin(th)];
+      b.d = d;
+      // plane basis → rotate in-plane so the axis is local +x (orient 'ex') or local +y (orient 'ey')
+      const B = u.planeBasis(b.plane); b.basis = B;
+      const d2 = { x: V.dot(d, B.ex), y: V.dot(d, B.ey) }; let phi = Math.atan2(d2.y, d2.x); if (b.orient === 'ey') phi -= Math.PI / 2;
+      const cph = Math.cos(phi), sph = Math.sin(phi);
+      let ux = V.add(V.scale(B.ex, cph), B.ey, sph), uy = V.add(V.scale(B.ex, -sph), B.ey, cph), N = B.N.slice();
+      const loc = q => { const r = B.to2d(q); return { x: r.x * cph + r.y * sph, y: -r.x * sph + r.y * cph }; };
+      let pts = b.branches.map(br => br.map(loc));
+      // choose the plane's normal sign so the unfolding rotation is the short way (mirror only across the curve's own symmetry axis)
+      const F = S.facingBasis(S.yawAt(b.t0 + 3.8), S.PITCH);
+      if (V.dot(N, F.N) < 0) { N = V.scale(N, -1); if (b.orient === 'ex') { uy = V.scale(uy, -1); pts = pts.map(br => br.map(q => ({ x: q.x, y: -q.y }))); } else { ux = V.scale(ux, -1); pts = pts.map(br => br.map(q => ({ x: -q.x, y: q.y }))); } }
+      // bounding box → panel rectangle; local coords relative to the bbox centre
+      let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9; pts.forEach(br => br.forEach(q => { x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y); }));
+      const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2; const pad = 0.28 + 0.1 * (x1 - x0 + y1 - y0) / 2;
+      b.loc = pts.map(br => br.map(q => ({ x: q.x - cx, y: q.y - cy })));
+      b.hw = (x1 - x0) / 2 + pad; b.hh = (y1 - y0) / 2 + pad;
+      b.C = V.add(V.add(b.p, ux, cx), uy, cy);                                    // 3D centre of the panel while attached
+      b.ux = ux; b.uy = uy; b.N = N;
+      b.closed = b.type === 'ellipse';
+      // where the cut point p sits in local coords (for the right-angle marker)
+      b.pLoc = { x: -cx, y: -cy };
+      // panel fit: px per unit so the panel fits 720×520 on the right, and 460×420 in a final slot
+      b.scalePanel = Math.min(720 / (2 * b.hw), 520 / (2 * b.hh), 300);
+      b.scaleSlot = Math.min(470 / (2 * b.hw), 400 / (2 * b.hh), 220);
+    }
+    // measured label widths not needed (centred text)
+  },
+
+  draw(api, t, S) {
+    const { ctx: c, u, W, H } = api; const E = u.ease; const boil = api.boil; const V = S.V;
+    const TEAL = '#58e0d0', TEAL2 = '#9ff5ea', GOLD = '#f3d27a', GOLD2 = '#ffe9a8', IVORY = '#f6f1e6';
+    const breathe = (speed, seed) => 0.85 + 0.15 * u.noise2(t * speed + seed * 5.3, seed);
+    const yaw = S.yawAt(t), pitch = S.PITCH, dist = S.DIST;
+
+    /* ------------------------------------------------------- background */
+    c.drawImage(S.navy, 0, 0);
+    { // twinkling stars + drifting teal motes (cheap)
+      const tq = api.tq; c.save(); c.globalCompositeOperation = 'lighter';
+      for (const s of S.twk) { const k = 0.5 + 0.5 * Math.sin(tq * s.f + s.ph); const a = 0.7 * (0.1 + 0.9 * k * k); const x = s.x * W, y = s.y * H, r = 1.6 * s.s * (0.8 + 0.5 * k); u.dab(c, x, y, r * 2.6, '#fff6dc', a * 0.3, 0.1); u.dab(c, x, y, r, '#fff6dc', a, 0.5); }
+      c.restore();
+      u.motes(c, t, { count: 26, box: [0, 0, W, H * 0.85], seed: 5, color: TEAL2, size: 2.2, speed: 0.35, alpha: 0.22, drift: 0.7 });
+    }
+
+    /* --------------------------------------------------------- helpers */
+    const cam = (cx, cy, fov, ty) => u.camera({ yaw, pitch, dist, fov, cx, cy, target: [0, ty, 0] });
+    const flipCam = P => { const P2 = (x, y, z) => P(x, -y, z); P2.pts = arr => arr.map(p => P2(p.x, p.y, p.z)); P2.o = P.o; return P2; };
+    // world point that projects to screen (sx,sy) at depth Z (relative to the camera target)
+    const screenToWorld = (P, sx, sy, Z) => { const o = P.o; const s = o.fov / (o.dist + Z); const X = (sx - o.cx) / s, Y = -(sy - o.cy) / s; const cp = Math.cos(o.pitch), sp = Math.sin(o.pitch), cyw = Math.cos(o.yaw), syw = Math.sin(o.yaw); const y = Y * cp + Z * sp, z1 = -Y * sp + Z * cp; const x = X * cyw + z1 * syw, z = -X * syw + z1 * cyw; return [o.target[0] + x, o.target[1] + y, o.target[2] + z]; };
+    // rotation taking basis Rp=[ex,ey,N] to Rt, as axis-angle; returns v -> rotated by k*angle
+    const rotBetween = (Rp, Rt) => {
+      const R = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+      for (let r = 0; r < 3; r++) for (let cc = 0; cc < 3; cc++) { let v = 0; for (let k = 0; k < 3; k++) v += Rt[k][r] * Rp[k][cc]; R[r][cc] = v; }   // R = Rt·Rpᵀ (columns = basis vectors)
+      const tr = R[0][0] + R[1][1] + R[2][2]; const ang = Math.acos(u.clamp((tr - 1) / 2, -1, 1));
+      let ax = [R[2][1] - R[1][2], R[0][2] - R[2][0], R[1][0] - R[0][1]]; const L = Math.hypot(ax[0], ax[1], ax[2]);
+      if (L < 1e-6) { // identity or 180°: take the dominant column of R+I
+        let best = 0, bl = -1; for (let j = 0; j < 3; j++) { const col = [R[0][j] + (j === 0), R[1][j] + (j === 1), R[2][j] + (j === 2)]; const l = Math.hypot(col[0], col[1], col[2]); if (l > bl) { bl = l; best = j; } }
+        ax = V.norm([R[0][best] + (best === 0), R[1][best] + (best === 1), R[2][best] + (best === 2)]); if (ang < 1e-6) ax = [0, 1, 0];
+      } else ax = V.scale(ax, 1 / L);
+      return (v, k) => { const a = ang * k, ca = Math.cos(a), sa = Math.sin(a); const kv = V.cross(ax, v), kd = V.dot(ax, v); return [v[0] * ca + kv[0] * sa + ax[0] * kd * (1 - ca), v[1] * ca + kv[1] * sa + ax[1] * kd * (1 - ca), v[2] * ca + kv[2] * sa + ax[2] * kd * (1 - ca)]; };
+    };
+    const sl = (arr, p) => arr.slice(0, Math.max(2, Math.round(p * (arr.length - 1)) + 1));
+
+    // ---- translucent teal cone (+ optional upper nappe) ----
+    function drawCone(P, K, a, o = {}) {
+      if (a <= 0.003) return null;
+      const { upAlpha = 1, glowApex = true } = o;
+      const draw = (co, aa, flip) => {
+        c.save(); c.globalAlpha = aa;
+        c.fillStyle = u.alpha(TEAL, 0.13); u.polyPath(c, co.outline, true); c.fill();
+        c.fillStyle = u.alpha(TEAL, 0.09); u.polyPath(c, co.ring, true); c.fill();
+        const j = 0.7, sd = boil * 5 + K.id * 40 + (flip ? 20 : 0);
+        u.ink(c, co.farArc, { w: 2.2, color: TEAL2, alpha: 0.35, jitter: j, seed: sd + 1, taper: 0, step: 5 });
+        u.glowLine(c, co.nearArc, { color: TEAL, w: 3.2, halo: 16, alpha: 0.95, seed: sd + 2, jitter: j });
+        u.glowLine(c, [co.apex2d, co.sil[0]], { color: TEAL, w: 3.2, halo: 16, alpha: 0.95, seed: sd + 3, jitter: j });
+        u.glowLine(c, [co.apex2d, co.sil[1]], { color: TEAL, w: 3.2, halo: 16, alpha: 0.95, seed: sd + 4, jitter: j });
+        c.restore();
+      };
+      const co = u.coneOutline(P, K.alpha, K.h, [0, 0, 0], 96);
+      let co2 = null;
+      if (K.hUp > 0 && upAlpha > 0.003) { co2 = u.coneOutline(flipCam(P), K.alpha, K.hUp, [0, 0, 0], 96); draw(co2, a * upAlpha, true); }
+      draw(co, a, false);
+      if (glowApex) S.glow(c, co.apex2d.x, co.apex2d.y, 70, '#bffff5', 0.3 * a);
+      return { co, co2 };
+    }
+    // apex-angle arc between the two silhouette lines (hand-drawn)
+    function apexArc(co, a, seed) {
+      if (a <= 0.003) return;
+      const ap = co.apex2d; const a0 = Math.atan2(co.sil[0].y - ap.y, co.sil[0].x - ap.x), a1 = Math.atan2(co.sil[1].y - ap.y, co.sil[1].x - ap.x);
+      let d = a1 - a0; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI;
+      const pts = u.ellipsePts(ap.x, ap.y, 64, 64, 14, 0, a0, a0 + d);
+      u.ink(c, pts, { w: 2.4, color: GOLD, alpha: 0.85 * a, jitter: 0.6, seed: boil * 3 + seed, taper: 0.3, step: 5 });
+    }
+    // ---- a panel = pale-gold plane rectangle + the section curve, at a rigid pose {C, ux, uy} ----
+    function drawPanel(P, b, pose, o = {}) {
+      const { alpha = 1, prog = 1, curveAlpha = 1, planeAlpha = 1, farTest = false, farAlpha = 0.45, glow = 0, marker = 0 } = o;
+      if (alpha <= 0.003) return;
+      const map = q => { const w = V.add(V.add(pose.C, pose.ux, q.x), pose.uy, q.y); return P(w[0], w[1], w[2]); };
+      // plane rectangle
+      if (planeAlpha > 0.003) {
+        const Q = [{ x: -b.hw, y: -b.hh }, { x: b.hw, y: -b.hh }, { x: b.hw, y: b.hh }, { x: -b.hw, y: b.hh }].map(map);
+        c.save(); c.globalAlpha = alpha * planeAlpha;
+        c.fillStyle = u.alpha(GOLD, 0.11); u.polyPath(c, Q, true); c.fill();
+        c.globalCompositeOperation = 'lighter'; c.fillStyle = u.alpha(GOLD, 0.05); u.polyPath(c, Q, true); c.fill(); c.globalCompositeOperation = 'source-over';
+        u.ink(c, Q, { w: 2.4, color: GOLD2, alpha: 0.6, jitter: 0.8, seed: boil * 3 + b.t0 + 7, closed: true, taper: 0, step: 6 });
+        c.restore();
+      }
+      if (glow > 0) { const cc = map({ x: 0, y: 0 }); S.glow(c, cc.x, cc.y, Math.max(b.hw, b.hh) * 1.1 * (P.o.fov / (P.o.dist + 0)) * 0.55, GOLD, 0.16 * glow * alpha * breathe(1.2, 4)); }
+      // right-angle marker at the cut point p (plane ⟂ generator)
+      if (marker > 0.003) {
+        const m = 0.13; const pl = b.pLoc; const back = V.scale(b.g, -m); // along the generator back toward the apex
+        const ax = b.orient === 'ex' ? { x: m, y: 0 } : { x: 0, y: m };    // along the curve axis (in-plane direction d)
+        const w0 = V.add(V.add(pose.C, pose.ux, pl.x), pose.uy, pl.y);
+        const A = V.add(w0, back), B = V.add(V.add(V.add(w0, back), pose.ux, ax.x), pose.uy, ax.y), Cc = V.add(V.add(w0, pose.ux, ax.x), pose.uy, ax.y);
+        const pts = [A, B, Cc].map(w => P(w[0], w[1], w[2]));
+        u.ink(c, pts, { w: 2.2, color: GOLD2, alpha: 0.9 * alpha * marker, jitter: 0.4, seed: boil * 3 + 31, taper: 0, step: 4 });
+      }
+      // section curve (branches), progressive, near/far split while attached to the cone
+      if (curveAlpha > 0.003 && prog > 0.01) {
+        b.loc.forEach((br, bi) => {
+          const n = br.length; const cnt = Math.max(2, Math.round(prog * (n - 1)) + 1); const closed = b.closed && prog >= 0.999;
+          const pts = []; const far = [];
+          for (let i = 0; i < cnt; i++) { const q = br[i]; const w = V.add(V.add(pose.C, pose.ux, q.x), pose.uy, q.y); const sp = P(w[0], w[1], w[2]); pts.push(sp); if (farTest) far.push(sp.z > P(0, w[1], 0).z + 1e-6); }
+          const seed = boil * 7 + b.t0 * 3 + bi * 11;
+          if (!farTest) { u.glowLine(c, pts, { color: TEAL, w: 4.2, halo: 22, alpha: alpha * curveAlpha, seed, jitter: 0.6, closed }); return; }
+          // split into runs of equal visibility
+          let i = 0; while (i < pts.length) { let j = i; while (j + 1 < pts.length && far[j + 1] === far[i]) j++; const run = pts.slice(i, j + 2 > pts.length ? j + 1 : j + 2); if (run.length >= 2) u.glowLine(c, run, { color: TEAL, w: far[i] ? 3 : 4.2, halo: far[i] ? 14 : 22, alpha: alpha * curveAlpha * (far[i] ? farAlpha : 1), seed: seed + i, jitter: 0.6 }); i = j + 1; }
+        });
+      }
+    }
+    const facingPose = (P, sx, sy, Z) => { const F = S.facingBasis(P.o.yaw, P.o.pitch); return { C: screenToWorld(P, sx, sy, Z), ux: F.xr, uy: F.yu, N: F.N }; };
+    const Zfor = (P, scale) => P.o.fov / scale - P.o.dist;   // depth at which 1 unit = `scale` px
+
+    /* ------------------------------------------- cone poses (row / stage) */
+    // returns {cx,cy,fov,alpha} for cone i at time t, or null
+    const ROWY = 500, ROWFOV = 1100;
+    const stageOf = K => ({ cx: S.STAGE.cx, cy: S.STAGE.cy, fov: K.fovBeat });
+    const lerpPose = (a, b, k) => ({ cx: u.lerp(a.cx, b.cx, k), cy: u.lerp(a.cy, b.cy, k), fov: u.lerp(a.fov, b.fov, k) });
+    function conePose(i) {
+      const K = S.cones[i]; const row = { cx: S.SLOTS[i].x, cy: ROWY, fov: ROWFOV }; const st = stageOf(K); const b = S.beats[i];
+      if (i === 1 && t < 5) { // the S04 cone morphs into the right cone at centre
+        const k = E.io(u.seg(t, 2.5, 5)); return { pose: lerpPose({ cx: 960, cy: 470, fov: 1500 }, row, k), alpha: 1, morph: k };
+      }
+      if (t < 9) { const k = E.io(u.seg(t, 2.5, 5)); return { pose: lerpPose({ cx: 960, cy: 470, fov: 1100 }, row, k), alpha: i === 1 ? 1 : E.out(u.seg(t, 2.6, 4.2)), morph: 1 }; }
+      if (i === 0) { if (t < b.t0 + 0.5) return { pose: lerpPose(row, st, E.io(u.seg(t, 9, 10.5))), alpha: 1, morph: 1 }; return { pose: st, alpha: 1 - E.io(u.seg(t, b.t1 - 0.7, b.t1)), morph: 1 }; }
+      if (t < 9.9) return { pose: row, alpha: 1 - E.io(u.seg(t, 9, 9.9)), morph: 1 };
+      if (t < b.t0) return null;
+      return { pose: st, alpha: Math.min(E.out(u.seg(t, b.t0, b.t0 + 0.6)), 1 - E.io(u.seg(t, b.t1 - 0.7, b.t1))), morph: 1 };
+    }
+
+    /* --------------------------------------------------------- intro row */
+    const kLab = Math.min(E.out(u.seg(t, 5.2, 5.9)), 1 - E.io(u.seg(t, 8.3, 8.95)));
+    for (let i = 0; i < 3; i++) {
+      const cp = conePose(i); if (!cp || cp.alpha <= 0.003) continue;
+      const K0 = S.cones[i]; let K = K0;
+      if (i === 1 && cp.morph < 1) K = { id: 1, alpha: u.lerp(S.s04cone.alpha, K0.alpha, cp.morph), h: u.lerp(S.s04cone.h, K0.h, cp.morph), hUp: 0 };
+      const activeBeat = S.beats[i]; const inBeat = t >= activeBeat.t0 - 1 && t < activeBeat.t1;
+      if (inBeat) continue;                                   // drawn by the beat block below (with plane/curve)
+      const ty = -(K.h - K.hUp) / 2;
+      const P = cam(cp.pose.cx, cp.pose.cy, cp.pose.fov, ty);
+      const r = drawCone(P, K, cp.alpha, { upAlpha: 1 });
+      if (r && kLab > 0 && t >= 5 && t < 9.4) {
+        const a = kLab * cp.alpha; apexArc(r.co, a, i * 7);
+        u.text(c, K0.ang, r.co.apex2d.x, r.co.apex2d.y - 48, { size: 34, weight: 600, color: GOLD2, alpha: 0.95 * a, glow: 12, glowColor: '#d9a441' });
+        u.text(c, K0.name, cp.pose.cx, 770, { size: 44, font: 'serif', weight: 700, color: '#f6d784', alpha: a, glow: 18, glowColor: '#d9a441' });
+      }
+    }
+
+    /* -------------------------------------------------------------- beats */
+    for (const b of S.beats) {
+      if (t < b.t0 - 1 || t >= b.t1 + 0.01 && b !== S.beats[2]) continue;
+      if (t < b.t0 - 1) continue;
+      const K = S.cones[b.cone]; const cp = conePose(b.cone); if (!cp) continue;
+      const tau = t - b.t0; const last = b === S.beats[2];
+      const ty = -(K.h - K.hUp) / 2;
+      const P = cam(cp.pose.cx, cp.pose.cy, cp.pose.fov, ty);
+      const kFade = last ? 1 - E.io(u.seg(t, 36.3, 37.1)) : cp.alpha;
+      // upper nappe (double cone) grows in as the plane arrives
+      const upA = K.hUp > 0 ? E.io(u.seg(tau, 0.3, 1.5)) : 0;
+      const coneAlpha = (b.cone === 0 && t < b.t0 + 0.5) ? cp.alpha : kFade;
+      drawCone(P, K, coneAlpha, { upAlpha: upA });
+      // 1. the chosen generator (apex → base), drawn progressively
+      const kGen = E.out(u.seg(tau, 0.4, 1.0)); const genA = kGen * kFade * (1 - 0.6 * E.io(u.seg(tau, 3.8, 4.4)));
+      if (kGen > 0) {
+        const e = V.scale(b.g, b.genLen * kGen); const a2 = P(0, 0, 0), e2 = P(e[0], e[1], e[2]);
+        u.ink(c, [a2, e2], { w: 2.6, color: GOLD2, alpha: 0.75 * genA, jitter: 0.6, seed: boil * 3 + 5, taper: 0.2, step: 5 });
+        const pp = P(b.p[0], b.p[1], b.p[2]); S.glow(c, pp.x, pp.y, 26, GOLD2, 0.35 * genA);
+      }
+      // 2. plane slides in along its own in-plane axis (1.0–2.5), 3. curve draws (2.5–3.5), 4. unfold (3.8–6.3)
+      const kSlide = E.out(u.seg(tau, 1.0, 2.5)); const kCurve = E.io(u.seg(tau, 2.5, 3.5)); const kUn = E.io(u.seg(tau, 3.8, 6.3));
+      if (kSlide > 0) {
+        // attached pose (with slide offset): pick whichever in-plane axis moves more across the screen, come from the right
+        const C0 = b.C; let dir = b.ux; { const c0 = P(C0[0], C0[1], C0[2]); const px = P(C0[0] + b.ux[0], C0[1] + b.ux[1], C0[2] + b.ux[2]).x - c0.x, py = P(C0[0] + b.uy[0], C0[1] + b.uy[1], C0[2] + b.uy[2]).x - c0.x; dir = Math.abs(px) >= Math.abs(py) ? V.scale(b.ux, Math.sign(px) || 1) : V.scale(b.uy, Math.sign(py) || 1); }
+        const slideD = 3.2 * (1 - kSlide);
+        const attached = { C: V.add(C0, dir, slideD), ux: b.ux, uy: b.uy, N: b.N };
+        const planeA = Math.min(1, u.seg(tau, 1.0, 1.5)) * kFade;
+        if (kUn <= 0) {
+          drawPanel(P, b, attached, { alpha: planeA, prog: kCurve, curveAlpha: 1, planeAlpha: 1, farTest: true, marker: E.out(u.seg(tau, 2.3, 2.9)) });
+        } else {
+          // ghost of the section stays on the cone
+          drawPanel(P, b, { C: C0, ux: b.ux, uy: b.uy, N: b.N }, { alpha: kFade, prog: 1, curveAlpha: 0.38, planeAlpha: 0, farTest: true, farAlpha: 0.4 });
+          // rigid motion: attached pose → facing pose at the right side (then, for the last beat, on to final slot 3)
+          let sx = S.PANEL.x, sy = S.PANEL.y, scale = b.scalePanel, pAlpha = kFade;
+          if (last) { const kMove = E.io(u.seg(t, 36.5, 38.0)); sx = u.lerp(S.PANEL.x, S.SLOTS[2].x, kMove); sy = u.lerp(S.PANEL.y, S.SLOTS[2].y, kMove); scale = u.lerp(b.scalePanel, b.scaleSlot, kMove); pAlpha = 1; }
+          const tgt = facingPose(P, sx, sy, Zfor(P, scale));
+          const rot = rotBetween([b.ux, b.uy, b.N], [tgt.ux, tgt.uy, tgt.N]);
+          const k = kUn; const ux = rot(b.ux, k), uy = rot(b.uy, k);
+          const Cc = [u.lerp(C0[0], tgt.C[0], k), u.lerp(C0[1], tgt.C[1], k), u.lerp(C0[2], tgt.C[2], k)];
+          drawPanel(P, b, { C: Cc, ux, uy }, { alpha: pAlpha, prog: 1, curveAlpha: 1, planeAlpha: 1, farTest: false, glow: k });
+        }
+      }
+      // 5. labels (name + short description) under the panel
+      const kName = Math.min(E.out(u.seg(tau, 6.0, 6.6)), last ? 1 - E.io(u.seg(t, 36.3, 36.9)) : kFade), kDesc = Math.min(E.out(u.seg(tau, 6.5, 7.1)), last ? 1 - E.io(u.seg(t, 36.3, 36.9)) : kFade);
+      if (kName > 0) u.text(c, b.name, S.PANEL.x, 765, { size: 60, font: 'serif', weight: 700, color: '#f6d784', alpha: kName, glow: 24, glowColor: '#d9a441', spacing: 4 });
+      if (kDesc > 0) u.text(c, b.desc, S.PANEL.x, 832, { size: 36, weight: 500, color: IVORY, alpha: 0.9 * kDesc });
+    }
+
+    /* ---------------------------------------- finale: three curves side by side (37–40) */
+    if (t >= 37.0) {
+      const P = cam(S.STAGE.cx, S.STAGE.cy, 1400, 0);
+      for (let i = 0; i < 2; i++) {
+        const b = S.beats[i]; const a = E.out(u.seg(t, 37.2 + i * 0.3, 38.2 + i * 0.3)); if (a <= 0) continue;
+        const sc = b.scaleSlot * (0.92 + 0.08 * a);
+        drawPanel(P, b, facingPose(P, S.SLOTS[i].x, S.SLOTS[i].y, Zfor(P, sc)), { alpha: a, prog: 1, glow: 0.8 });
+      }
+      const kL = E.out(u.seg(t, 38.0, 38.7));
+      if (kL > 0) for (let i = 0; i < 3; i++) {
+        const b = S.beats[i];
+        u.text(c, b.name, S.SLOTS[i].x, 745, { size: 56, font: 'serif', weight: 700, color: '#f6d784', alpha: kL, glow: 24, glowColor: '#d9a441', spacing: 4 });
+        u.text(c, b.desc, S.SLOTS[i].x, 808, { size: 34, weight: 500, color: IVORY, alpha: 0.9 * kL });
+      }
+    }
+  },
+});
+
+
+/* ===== src/scenes/s06.js ===== */
+/* ============================================================================
+   S06 — 두 곡선이 만나는 순간  (global 200–240 s, local 0–40)
+   All math space (navy sky + nebula + stars layer). A sand-scratched figure
+   (Menaechmus' two curves in a sand tray) darkens and dissolves into a modern
+   coordinate plane; the two parabolas x² = ay and y² = 2ax draw on as glowing
+   hand-inked curves; their non-origin intersection (∛2·a, ∛4·a) is marked in
+   gold, a perpendicular drops to the x-axis, x³ = 2a³ → x = ∛2·a appears; the
+   glowing segment of length x lifts off the axis and becomes the edge of the
+   new cube (volume 2a³) next to the original cube (a³); both glow gold.
+
+   Geometry: a = 1 unit = 250 px, origin at (640, 720). Intersection of
+   x² = y and y² = 2x (other than O): x⁴ = 2x → x = 2^(1/3) ≈ 1.2599,
+   y = x² = 2^(2/3) ≈ 1.5874  →  pixel (955.0, 323.2).
+
+   Timing map (scene-local seconds; subtitles from script.js in brackets):
+     0.0– 3.8  sand-tray figure (two scratched curves + two scratched lines)
+               darkens and dissolves into the navy plane      [1–39.5 caption]
+     2.2– 3.8  faint grid fades in;  2.6–4.0 axes ink on;  3.6–4.4 ticks/labels
+     4.2– 7.6  parabola 1  x² = ay draws (left arm → O → right arm) [4–8.5]
+     6.6– 7.4    label x² = ay
+    11.2–14.6  parabola 2  y² = 2ax draws (lower arm → O → upper arm) [11–15.5]
+    13.6–14.4    label y² = 2ax
+    18.0–19.3  O ringed briefly (the trivial intersection), gold marker +
+               pulse rings at the other intersection from 18.5        [18–25.5]
+    19.3–20.0    coordinates (∛2a, ∛4a)
+    19.8–20.8    perpendicular drops to the x-axis; foot tick + label x
+    21.2–23.0    x³ = 2a³ typed;  23.4–25.0  x = ∛2 × a typed;  25.3 x ≈ 1.26a
+    25.6–      the segment O→foot (length x) glows gold on the axis
+    26.3–28.3  segment lifts and turns into the front-bottom edge of the new
+               cube; the plane fades out (26.3–28.8)                  [27–34.5]
+    28.0–29.6  new cube (edge ∛2·a) fades in around the edge
+    29.4–31.0  original cube (edge a) fades in on the left
+    31.2–33.2  labels: a / x = ∛2·a ; 원래 부피: a³ / 새로운 부피: 2a³
+    32.5–      top line  x = ∛2·a ≈ 1.26a
+    36.0–40.0  both cubes glow gold; engine fade-out 0.9             [35–39.5]
+   ========================================================================== */
+ANIM.scene({
+  id: 's06', title: '두 곡선이 만나는 순간',
+  start: ANIM.TIMES.s06[0], end: ANIM.TIMES.s06[1],
+  mood: t => (t < 26 ? 'rise' : 'finale'),
+  fadeIn: 0.9, fadeOut: 0.9,
+
+  init(api, S) {
+    const { u, W, H } = api, P = ANIM.paint;
+
+    /* ---------------------------------------------------- navy math space */
+    S.navy = u.layer(W, H, c => {
+      P.sky(c, { preset: 'navyMath', seed: 61, horizon: H * 1.05, clouds: false });
+      P.nebula(c, { seed: 67, alpha: 0.8, count: 11, colors: ['#1f3f6e', '#2a2a66', '#1c4d58', '#3a2f66'] });
+      P.stars(c, { seed: 71, count: 150, yMax: H, alpha: 0.55 });
+      u.paper(c, 0.14);
+    });
+
+    /* ------------------------------------------- coordinate system (exact) */
+    S.U = 250;                                   // a = 1 unit = 250 px
+    S.O = { x: 640, y: 720 };
+    const px = (S.px = (x, y) => ({ x: S.O.x + x * S.U, y: S.O.y - y * S.U }));
+    S.cb = Math.cbrt(2);                         // ∛2 ≈ 1.2599
+    S.ix = { x: S.cb, y: S.cb * S.cb };           // intersection (∛2, ∛4)
+    S.ipx = px(S.ix.x, S.ix.y);                  // ≈ (955.0, 323.2)
+    S.foot = px(S.ix.x, 0);
+
+    // parabola 1: x² = y  (opens up), parametrised in x, then resampled to even arc length
+    const p1 = []; for (let i = 0; i <= 320; i++) { const x = -1.72 + 3.44 * i / 320; p1.push(px(x, x * x)); }
+    S.par1 = u.resample(p1, 5);
+    // parabola 2: y² = 2x  (opens right), parametrised in y from the lower arm to the upper arm
+    const p2 = []; for (let i = 0; i <= 320; i++) { const y = -1.3 + 4.3 * i / 320; p2.push(px(y * y / 2, y)); }
+    S.par2 = u.resample(p2, 5);
+
+    // faint hand-inked grid (static layer; the axes boil per frame)
+    S.grid = u.layer(W, H, c => {
+      const col = '#9ff5ea';
+      for (let x = -2.5; x <= 4.5; x += 0.5) { const X = px(x, 0).x; if (X < 30 || X > W - 30) continue; const major = Math.abs(x - Math.round(x)) < 1e-6; u.ink(c, [{ x: X, y: 30 }, { x: X, y: H - 20 }], { w: major ? 1.5 : 1.0, color: col, alpha: major ? 0.17 : 0.08, jitter: 0.9, seed: 300 + x * 4, taper: 0, step: 10 }); }
+      for (let y = -1.5; y <= 3; y += 0.5) { const Y = px(0, y).y; if (Y < 20 || Y > H - 20) continue; const major = Math.abs(y - Math.round(y)) < 1e-6; u.ink(c, [{ x: 40, y: Y }, { x: W - 40, y: Y }], { w: major ? 1.5 : 1.0, color: col, alpha: major ? 0.17 : 0.08, jitter: 0.9, seed: 400 + y * 4, taper: 0, step: 10 }); }
+    });
+
+    /* ------------------------------ sand-tray figure (Menaechmus' sketch) */
+    S.sand = u.layer(W, H, c => {
+      P.sandTray(c, { x: -140, y: -140, w: W + 280, h: H + 280, seed: 61 });
+      // two scratched "diameters" (slightly off the modern axes) and the two curves, roughly
+      const wob = (pts, j, s) => u.wobble(u.resample(pts, 12), j, s, 0.004);
+      P.sandLine(c, wob([{ x: 120, y: 742 }, { x: 1800, y: 706 }], 4, 5), { seed: 5, w: 9, color: '#7a5d3a' });
+      P.sandLine(c, wob([{ x: 652, y: 60 }, { x: 628, y: 1040 }], 4, 6), { seed: 6, w: 9, color: '#7a5d3a' });
+      P.sandLine(c, wob(S.par1, 4, 7), { seed: 7, w: 11, color: '#6f5232' });
+      P.sandLine(c, wob(S.par2, 4, 8), { seed: 8, w: 11, color: '#6f5232' });
+      // a few grains / pebbles and a finger-smudge where the curves cross
+      const r = u.rng(91); for (let i = 0; i < 70; i++) { const x = r() * W, y = r() * H; u.dab(c, x, y, 2 + r() * 4, r() < 0.5 ? '#6d5636' : '#efe0b8', 0.5, 0.3); }
+      u.wash(c, u.ellipsePts(S.ipx.x, S.ipx.y, 70, 40, 24, 0.5), '#b89c6e', { seed: 3, passes: 2, spread: 8, alpha: 0.25 });
+      // low light: a single oil lamp off-frame at the upper left; the rest of the tray falls into shadow
+      c.fillStyle = 'rgba(28,18,10,0.5)'; c.fillRect(0, 0, W, H);
+      const g = c.createRadialGradient(430, 300, 80, 430, 300, 1500); g.addColorStop(0, 'rgba(255,214,150,0.55)'); g.addColorStop(0.35, 'rgba(255,190,120,0.18)'); g.addColorStop(1, 'rgba(10,6,4,0.75)');
+      c.fillStyle = g; c.fillRect(0, 0, W, H);
+      u.paper(c, 0.22);
+    });
+
+    /* ------------------------------------------------- cached glow sprite */
+    S.spr = {};
+    S.glow = (c, x, y, r, color, alpha = 0.6) => {
+      let s = S.spr[color];
+      if (!s) s = S.spr[color] = u.layer(256, 256, cc => { const g = cc.createRadialGradient(128, 128, 0, 128, 128, 128); g.addColorStop(0, color); g.addColorStop(0.35, u.alpha(color, 0.5)); g.addColorStop(1, u.alpha(color, 0)); cc.fillStyle = g; cc.fillRect(0, 0, 256, 256); });
+      c.save(); c.globalAlpha *= alpha; c.drawImage(s, x - r, y - r, r * 2, r * 2); c.restore();
+    };
+
+    /* ------------------------------------------------------ text metrics */
+    S.F = { f1: 'x³ = 2a³', f2: 'x = ∛2 × a', f3: 'x ≈ 1.26a', top: 'x = ∛2 × a ≈ 1.26a' };
+    const m = u.layer(8, 8).getContext('2d');
+    S.w = { f1: u.math(m, S.F.f1, 0, 0, { size: 64 }), f2: u.math(m, S.F.f2, 0, 0, { size: 58 }) };
+
+    /* --------------------------------------------- 3D layout for the cubes */
+    S.A = { o: [-2.25, -1, -0.5], s: 1 };                       // original cube a (left)
+    S.X = { o: [0.95 - S.cb / 2, -1, -S.cb / 2], s: S.cb };    // new cube, edge ∛2·a (right)
+    S.cam = (t, E) => u.camera({ yaw: 0.50 + 0.12 * E.sine(u.seg(t, 26, 40)), pitch: 0.30, dist: 10, fov: 2350, cx: W * 0.5 + 95, cy: 470, target: [0, 0, 0] });
+    S.chimed = false;
+  },
+
+  draw(api, t, S) {
+    const { ctx: c, u, W, H } = api, E = u.ease, P = ANIM.paint;
+    const boil = api.boil, tq = api.tq;
+    const gold = '#f3d27a', ivory = '#f6f1e6', teal = '#58e0d0', inkM = '#9ff5ea';
+
+    /* --------------------------------------------------- background */
+    c.drawImage(S.navy, 0, 0);
+    u.motes(c, t, { count: 26, seed: 29, color: inkM, size: 2.2, speed: 0.4, alpha: 0.28, drift: 0.7 });
+    if (P.particles) P.particles(c, t, { kind: 'glint', count: 9, box: [60, 20, W - 120, 420], seed: 31, size: 0.8, speed: 0.5, alpha: 0.3, color: '#fff6dc' });
+
+    /* ----------------------------------- sand figure → plane (0–3.8) */
+    const kPlane = E.io(u.seg(t, 1.6, 3.8));
+    if (kPlane < 1) {
+      c.save(); c.globalAlpha = 1 - kPlane; c.drawImage(S.sand, 0, 0);
+      // lamp flicker over the sand (warm pool breathing from the upper left) + a little drifting dust
+      const fl = 0.8 + 0.14 * u.noise2(t * 7 + 3, 1) + 0.06 * u.snoise(t * 23);
+      c.globalCompositeOperation = 'soft-light'; S.glow(c, 430, 300, 1300 * fl, '#ffd9a0', 0.9 * fl); c.globalCompositeOperation = 'source-over';
+      u.motes(c, t, { count: 16, box: [100, 60, 1000, 600], seed: 23, color: '#ffe3b0', size: 2.2, speed: 0.35, alpha: 0.22, drift: 0.6 });
+      // the room darkens while the figure dissolves
+      c.fillStyle = `rgba(6,8,20,${0.55 * E.io(u.seg(t, 0.4, 3.2))})`; c.fillRect(0, 0, W, H);
+      c.restore();
+    }
+
+    /* ----------------------------- coordinate plane (fades 26.3–28.8) */
+    const kPlaneOut = 1 - E.io(u.seg(t, 26.3, 28.8));
+    const pa = kPlane * kPlaneOut;                     // plane alpha
+    if (pa > 0.005) {
+      c.save(); c.globalAlpha = pa * E.io(u.seg(t, 2.2, 3.8)); c.drawImage(S.grid, 0, 0); c.restore();
+
+      // axes (hand-inked, boiling), drawn on 2.6–4.0
+      const kx = E.out(u.seg(tq, 2.6, 3.5)), ky = E.out(u.seg(tq, 3.0, 4.0));
+      const O = S.O, axCol = '#d9f7f2';
+      if (kx > 0) {
+        const x0 = 70, x1 = u.lerp(x0, W - 70, kx);
+        u.ink(c, [{ x: x0, y: O.y }, { x: x1, y: O.y }], { w: 3, color: axCol, alpha: 0.85 * pa, jitter: 1.0, seed: boil * 3 + 11, taper: 0.05, step: 8 });
+        if (kx > 0.98) arrow(x1, O.y, 0);
+      }
+      if (ky > 0) {
+        const y0 = 1000, y1 = u.lerp(y0, 40, ky);
+        u.ink(c, [{ x: O.x, y: y0 }, { x: O.x, y: y1 }], { w: 3, color: axCol, alpha: 0.85 * pa, jitter: 1.0, seed: boil * 3 + 12, taper: 0.05, step: 8 });
+        if (ky > 0.98) arrow(O.x, y1, -Math.PI / 2);
+      }
+      // ticks + unit labels (a = 1 unit), axis names
+      const kt = E.out(u.seg(t, 3.6, 4.4));
+      if (kt > 0.01) {
+        const tick = (p, vert, lab, dx, dy, a) => { u.ink(c, vert ? [{ x: p.x - 11, y: p.y }, { x: p.x + 11, y: p.y }] : [{ x: p.x, y: p.y - 11 }, { x: p.x, y: p.y + 11 }], { w: 2.4, color: axCol, alpha: 0.8 * a, jitter: 0.5, seed: boil + p.x * 0.1 + p.y * 0.3, taper: 0.2 }); if (lab) u.math(c, lab, p.x + dx, p.y + dy, { size: 34, color: ivory, alpha: 0.72 * a }); };
+        [1, 2, 3, 4].forEach(i => tick(S.px(i, 0), false, i === 1 ? 'a' : i + 'a', 0, 34, kt * pa));
+        [-1].forEach(i => tick(S.px(i, 0), false, '−a', 0, 34, kt * pa));
+        [1, 2].forEach(i => tick(S.px(0, i), true, i === 1 ? 'a' : i + 'a', -36, 0, kt * pa));
+        u.math(c, 'x', W - 60, O.y + 44, { size: 46, color: ivory, alpha: 0.9 * kt * pa });
+        u.math(c, 'y', O.x - 46, 60, { size: 46, color: ivory, alpha: 0.9 * kt * pa });
+        u.math(c, 'O', O.x - 28, O.y + 36, { size: 38, color: ivory, alpha: 0.8 * kt * pa });
+      }
+
+      /* ------------------------------ parabola 1: x² = ay (4.2–7.6) */
+      drawCurve(S.par1, E.io(u.seg(t, 4.2, 7.6)), teal, boil * 3 + 101, pa);
+      const kl1 = E.out(u.seg(t, 6.6, 7.4));
+      if (kl1 > 0.01) u.math(c, 'x² = ay', 290, 300, { size: 52, color: '#bffff5', align: 'right', alpha: kl1 * pa, glow: 16 });
+
+      /* ----------------------------- parabola 2: y² = 2ax (11.2–14.6) */
+      drawCurve(S.par2, E.io(u.seg(t, 11.2, 14.6)), gold, boil * 3 + 202, pa);
+      const kl2 = E.out(u.seg(t, 13.6, 14.4));
+      if (kl2 > 0.01) u.math(c, 'y² = 2ax', 1560, 250, { size: 52, color: '#ffe9a8', align: 'left', alpha: kl2 * pa, glow: 16 });
+
+      /* ------------------------------------ intersection (18.0–25.5) */
+      if (t >= 18.0) {
+        if (!S.chimed) { S.chimed = true; try { ANIM.snd.chime(880, 2.4, 0.09); } catch (e) { } }
+        // O: the trivial intersection, ringed briefly (18.0–19.3)
+        const kO = Math.min(E.out(u.seg(t, 18.0, 18.5)), 1 - E.io(u.seg(t, 18.8, 19.3)));
+        if (kO > 0.01) { const r = 22 + 10 * E.out(u.seg(t, 18.0, 18.6)); u.ink(c, u.circlePts(O.x, O.y, r, 28), { w: 2.6, color: inkM, alpha: 0.7 * kO * pa, jitter: 0.8, seed: boil * 3 + 31, closed: true, taper: 0 }); }
+
+        // gold marker at (∛2a, ∛4a) with pulse rings
+        const I = S.ipx, kI = E.outBack(u.seg(t, 18.5, 19.0));
+        if (kI > 0.01) {
+          const pulse = 0.8 + 0.2 * Math.sin((t - 18.5) * 4.2);
+          S.glow(c, I.x, I.y, 120 * pulse, gold, 0.35 * pa);
+          S.glow(c, I.x, I.y, 44, '#fff3c4', 0.6 * pa);
+          u.dab(c, I.x, I.y, 13 * kI, gold, 0.95 * pa, 0.6); u.dab(c, I.x, I.y, 6 * kI, '#ffffff', 0.95 * pa, 0.7);
+          u.ink(c, u.circlePts(I.x, I.y, 19 * kI, 24), { w: 2.8, color: '#ffe9a8', alpha: 0.9 * pa, jitter: 0.7, seed: boil * 3 + 41, closed: true, taper: 0 });
+          // expanding rings every 1.6 s
+          for (let k = 0; k < 2; k++) { const ph = ((t - 18.5) / 1.6 + k * 0.5) % 1; if (t - 18.5 < k * 0.8) continue; const r = 20 + 75 * ph, a = (1 - ph) * (1 - ph) * 0.6; u.ink(c, u.circlePts(I.x, I.y, r, 32), { w: 2, color: gold, alpha: a * pa, jitter: 0.6, seed: boil * 3 + 51 + k, closed: true, taper: 0 }); }
+        }
+        // coordinates label (upper-left of the point, clear of both arms)
+        const kC = E.out(u.seg(t, 19.3, 20.0));
+        if (kC > 0.01) u.math(c, '(∛2a, ∛4a)', I.x - 28, I.y - 52, { size: 42, color: ivory, align: 'right', alpha: 0.95 * kC * pa, glow: 12 });
+
+        // perpendicular to the x-axis (dashed, hand-inked), foot tick and label x
+        const kD = E.io(u.seg(tq, 19.8, 20.8));
+        if (kD > 0.01) {
+          const L = (S.foot.y - I.y) * kD; const dash = 20, gap = 13; let s0 = 0, i = 0;
+          while (s0 < L) { const s1 = Math.min(L, s0 + dash); u.ink(c, [{ x: I.x, y: I.y + s0 }, { x: I.x, y: I.y + s1 }], { w: 2.6, color: '#ffe9a8', alpha: 0.8 * pa, jitter: 0.5, seed: boil * 3 + 61 + i, taper: 0.2, step: 5 }); s0 += dash + gap; i++; }
+          if (kD > 0.97) {
+            const kf = E.out(u.seg(t, 20.8, 21.3));
+            u.ink(c, [{ x: S.foot.x, y: S.foot.y - 14 }, { x: S.foot.x, y: S.foot.y + 14 }], { w: 3.4, color: gold, alpha: 0.95 * pa, jitter: 0.5, seed: boil * 3 + 71, taper: 0.2 });
+            u.dab(c, S.foot.x, S.foot.y, 7, gold, 0.9 * pa, 0.6);
+            u.math(c, 'x', S.foot.x + 16, S.foot.y + 44, { size: 46, color: gold, alpha: kf * pa, glow: 16 });
+          }
+        }
+
+        // formulas (typed at 12 fps) in the empty lower-right quadrant
+        const fx = 1510;
+        typed(S.F.f1, S.w.f1, fx, 520, E.sine(u.seg(tq, 21.2, 23.0)), 64, gold, 22, pa);
+        typed(S.F.f2, S.w.f2, fx, 612, E.sine(u.seg(tq, 23.4, 25.0)), 58, gold, 18, pa);
+        const k3 = E.out(u.seg(t, 25.3, 25.9)); if (k3 > 0.01) u.math(c, S.F.f3, fx, 690, { size: 46, color: ivory, alpha: k3 * pa, glow: 12 });
+
+        // the segment O→foot of length x glows gold on the axis (25.6–)
+        const kS = E.out(u.seg(t, 25.6, 26.3));
+        if (kS > 0.01 && t < 26.3) {
+          const pl = 0.85 + 0.15 * Math.sin(t * 5);
+          u.glowLine(c, [{ x: O.x, y: O.y }, { x: S.foot.x, y: S.foot.y }], { color: gold, w: 6 * kS, halo: 30, alpha: kS * pl * pa, seed: boil * 3 + 81, jitter: 0.5 });
+        }
+      }
+    }
+
+    /* ---------------------------- segment lifts → cubes (26.3–40) */
+    if (t >= 26.3) {
+      const Pj = S.cam(t, E);
+      const eX = bottomEdge(Pj, S.X.o, S.X.s);           // front-bottom edge of the new cube
+      const left = eX.a.x < eX.b.x ? eX.a : eX.b, right = left === eX.a ? eX.b : eX.a;
+      const kL = E.io(u.seg(t, 26.3, 28.3));
+      const lift = -170 * Math.sin(Math.PI * kL);        // rises off the axis, then settles onto the cube edge
+      const p0 = { x: u.lerp(S.O.x, left.x, kL), y: u.lerp(S.O.y, left.y, kL) + lift }, p1 = { x: u.lerp(S.foot.x, right.x, kL), y: u.lerp(S.foot.y, right.y, kL) + lift };
+      const kGold = E.io(u.seg(t, 36, 39.5));
+      const colFace = P.mix(teal, gold, kGold), colEdge = P.mix(inkM, '#ffe9a8', kGold);
+
+      // floor light pools under the cubes
+      const kX = E.out(u.seg(t, 28.0, 29.6)), kA = E.out(u.seg(t, 29.4, 31.0));
+      const cA = [S.A.o[0] + 0.5, S.A.o[2] + 0.5], cX = [S.X.o[0] + S.X.s / 2, S.X.o[2] + S.X.s / 2];
+      const fa = Pj(cA[0], -1, cA[1]), fxp = Pj(cX[0], -1, cX[1]); const brf = 0.8 + 0.2 * Math.sin(t * 0.9);
+      c.save(); c.translate(0, fa.y + 10); c.scale(1, 0.3); c.translate(0, -(fa.y + 10));
+      S.glow(c, fa.x, fa.y + 10, 380, colFace, 0.12 * brf * kA); S.glow(c, fxp.x, fxp.y + 10, 500, colFace, 0.14 * brf * kX);
+      c.restore();
+
+      // cubes
+      if (kA > 0.01) u.cube(c, Pj, { origin: S.A.o, size: S.A.s, color: colFace, edge: colEdge, faceAlpha: 0.13, w: 3, jitter: 0.8, seed: boil * 7 + 500, alpha: kA, hiddenAlpha: 0.25 });
+      if (kX > 0.01) u.cube(c, Pj, { origin: S.X.o, size: S.X.s, color: colFace, edge: colEdge, faceAlpha: 0.13, w: 3, jitter: 0.8, seed: boil * 11 + 600, alpha: kX, hiddenAlpha: 0.25 });
+
+      // the lifted segment (stays gold over the new cube's edge, then eases away)
+      const kSeg = 1 - E.io(u.seg(t, 30.0, 31.5));
+      if (kSeg > 0.01) {
+        const pl = 0.85 + 0.15 * Math.sin(t * 5);
+        c.save(); c.globalCompositeOperation = 'lighter';
+        if (kL > 0.01 && kL < 0.99) { // faint trail while moving
+          const tr = [{ x: u.lerp(S.O.x, p0.x, 0.6), y: u.lerp(S.O.y, p0.y, 0.6) }, p0];
+          u.ink(c, tr, { w: 16, color: u.alpha(gold, 0.15), jitter: 1.2, seed: boil * 3 + 91, taper: 0.9, step: 8 });
+        }
+        c.restore();
+        u.glowLine(c, [p0, p1], { color: gold, w: 6, halo: 30, alpha: kSeg * pl, seed: boil * 3 + 81, jitter: 0.5 });
+        S.glow(c, p0.x, p0.y, 34, '#fff3c4', 0.5 * kSeg); S.glow(c, p1.x, p1.y, 34, '#fff3c4', 0.5 * kSeg);
+      }
+
+      // labels
+      const kLab = E.out(u.seg(t, 31.2, 32.2)), kVol = E.out(u.seg(t, 32.2, 33.2));
+      if (kLab > 0.01) {
+        const ea = bottomEdge(Pj, S.A.o, S.A.s);
+        u.math(c, 'a', ea.mx, ea.my + 46, { size: 50, color: gold, alpha: kLab * kA, glow: 16 });
+        u.math(c, 'x = ∛2 × a', eX.mx, eX.my + 46, { size: 50, color: gold, alpha: kLab * kX, glow: 16 });
+      }
+      if (kVol > 0.01) {
+        const ea = bottomEdge(Pj, S.A.o, S.A.s);
+        volLabel('원래 부피: ', 'a³', ea.mx, ea.my + 122, kVol * kA);
+        volLabel('새로운 부피: ', '2a³', eX.mx, eX.my + 122, kVol * kX);
+      }
+      const kTop = E.out(u.seg(t, 32.5, 33.5));
+      if (kTop > 0.01) u.math(c, S.F.top, W / 2, 150, { size: 60, color: P.mix(gold, '#fff3c4', kGold * 0.6), alpha: kTop, glow: 24 });
+
+      // finale: both cubes glow gold (36–40)
+      if (kGold > 0.01) {
+        const ca3 = Pj(cA[0], -0.5, cA[1]), cx3 = Pj(cX[0], -1 + S.X.s / 2, cX[1]);
+        c.save(); c.globalCompositeOperation = 'lighter';
+        S.glow(c, ca3.x, ca3.y, 300 + 60 * Math.sin(t * 1.3), gold, 0.28 * kGold);
+        S.glow(c, cx3.x, cx3.y, 400 + 70 * Math.sin(t * 1.1 + 1), gold, 0.34 * kGold);
+        c.restore();
+        u.motes(c, t, { count: 40, box: [200, 200, W - 400, 600], seed: 97, color: '#ffe9a8', size: 2.8, speed: 0.8, alpha: 0.5 * kGold, drift: 1 });
+        u.grade(c, '#f3d27a', 0.16 * kGold, 'soft-light');
+      }
+    }
+
+    /* ----------------------------------------------------- helpers */
+    function drawCurve(pts, k, color, seed, a) {
+      if (k <= 0.002 || a <= 0.005) return;
+      const n = Math.max(2, Math.round(pts.length * k));
+      const part = pts.slice(0, n);
+      u.glowLine(c, part, { color, w: 5, halo: 26, alpha: a, seed, jitter: 0.6 });
+      if (k < 0.995) { const h = part[part.length - 1]; S.glow(c, h.x, h.y, 60, '#ffffff', 0.5 * a); u.dab(c, h.x, h.y, 7, '#ffffff', 0.9 * a, 0.6); }
+    }
+    function arrow(x, y, ang) {
+      const ca = Math.cos(ang), sa = Math.sin(ang), L = 26, Wd = 11;
+      const tip = { x, y }, l = { x: x - L * ca + Wd * sa, y: y - L * sa - Wd * ca }, r = { x: x - L * ca - Wd * sa, y: y - L * sa + Wd * ca };
+      u.ink(c, [l, tip, r], { w: 3, color: '#d9f7f2', alpha: 0.85 * pa, jitter: 0.5, seed: boil * 3 + 13 + ang, taper: 0.3, step: 4 });
+    }
+    function typed(str, w, cx, y, p, size, color, glowK, a) {
+      if (p <= 0 || a <= 0.01) return;
+      const s = u.typed(str, p); const x0 = cx - w / 2;
+      u.math(c, s, x0, y, { size, color, align: 'left', alpha: a, glow: glowK });
+      if (p < 1) { const cw = u.math(c, s, -9999, -9999, { size, alpha: 0 }); S.glow(c, x0 + cw + 6, y, 26, '#fff6d0', 0.5 * a); }
+    }
+    function volLabel(txt, mth, cx, y, a) {
+      if (a <= 0.01) return;
+      const wt = u.textW(c, txt, 38, 'sans', 500), wm = u.math(c, mth, -9999, -9999, { size: 50, alpha: 0 });
+      const x0 = cx - (wt + wm) / 2;
+      u.text(c, txt, x0, y, { size: 38, color: ivory, align: 'left', alpha: a, glow: 8 });
+      u.math(c, mth, x0 + wt, y, { size: 50, color: ivory, align: 'left', alpha: a, glow: 14 });
+    }
+    function bottomEdge(Pj, o, s) {
+      const cs = [[o[0], o[1], o[2]], [o[0] + s, o[1], o[2]], [o[0] + s, o[1], o[2] + s], [o[0], o[1], o[2] + s]].map(v => Pj(v[0], v[1], v[2]));
+      let k = 0; cs.forEach((p, i) => { if (p.y > cs[k].y) k = i; });
+      const a = cs[k], n1 = cs[(k + 1) % 4], n2 = cs[(k + 3) % 4];
+      const b = Math.hypot(n1.x - a.x, n1.y - a.y) > Math.hypot(n2.x - a.x, n2.y - a.y) ? n1 : n2;
+      return { a, b, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
     }
   },
 });

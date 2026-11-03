@@ -278,9 +278,9 @@
       if (a <= 0) continue;
       const who = s.who || 'n';
       if (who === 'n') {
-        const size = 44; const w = u.textW(c, s.text, size, 'sans', 600) + 70; const y = H - 118;
-        c.save(); c.globalAlpha = a * 0.55; c.fillStyle = '#05070d'; roundRect(c, W / 2 - w / 2, y - 40, w, 80, 12); c.fill(); c.restore();
-        u.text(c, s.text, W / 2, y, { size, weight: 600, color: '#f6f1e6', alpha: a, glow: 0 });
+        const size = 44; const lines = wrapText(c, s.text, size, 1640); const lh = size * 1.3; const w = Math.max(...lines.map(l => u.textW(c, l, size, 'sans', 600))) + 70; const y = H - 118 - (lines.length - 1) * lh / 2;
+        c.save(); c.globalAlpha = a * 0.55; c.fillStyle = '#05070d'; roundRect(c, W / 2 - w / 2, y - 40, w, 80 + (lines.length - 1) * lh, 12); c.fill(); c.restore();
+        lines.forEach((l, i) => u.text(c, l, W / 2, y + i * lh, { size, weight: 600, color: '#f6f1e6', alpha: a, glow: 0 }));
       } else if (who === 'o') {
         const y = H - 215; u.text(c, s.text, W / 2 + 2, y + 3, { size: 54, font: 'serif', weight: 700, color: '#000', alpha: a * 0.6, spacing: 3 });
         u.text(c, s.text, W / 2, y, { size: 54, font: 'serif', weight: 700, color: '#f6d784', alpha: a, glow: 28, glowColor: '#ffb640', spacing: 3 });
@@ -293,6 +293,8 @@
       }
     }
   }
+  // split a subtitle into at most 2 lines at a space nearest the middle when too wide
+  function wrapText(c, text, size, maxW) { if (u.textW(c, text, size, 'sans', 600) <= maxW) return [text]; const words = text.split(' '); if (words.length < 2) return [text]; let best = null, bestD = 1e9; for (let i = 1; i < words.length; i++) { const a = words.slice(0, i).join(' '), b = words.slice(i).join(' '); const d = Math.abs(u.textW(c, a, size, 'sans', 600) - u.textW(c, b, size, 'sans', 600)); if (d < bestD) { bestD = d; best = [a, b]; } } return best; }
   function roundRect(c, x, y, w, h, r) { c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath(); }
 
   function renderFrame(T, dt = 1 / 24) {

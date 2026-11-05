@@ -1,7 +1,7 @@
 // Inline every source file into one standalone index.html
 const fs = require('fs'), path = require('path');
 const root = path.join(__dirname, '..');
-const files = ['src/engine.js', 'src/script.js', 'src/plates.js', 'src/paint.js', ...fs.readdirSync(path.join(root, 'src/scenes')).filter(f => f.endsWith('.js')).sort().map(f => 'src/scenes/' + f)];
+const files = ['src/engine.js', 'src/script.js', 'src/plates.js', 'src/motion.js', 'src/motion-data.js', 'src/paint.js', ...fs.readdirSync(path.join(root, 'src/scenes')).filter(f => f.endsWith('.js')).sort().map(f => 'src/scenes/' + f)];
 let js = '';
 for (const f of files) { const p = path.join(root, f); if (!fs.existsSync(p)) { console.warn('skip missing', f); continue; } js += `\n/* ===== ${f} ===== */\n` + fs.readFileSync(p, 'utf8').replace(/<\/script/gi, '<\\/script') + '\n'; }
 const html = `<!doctype html>

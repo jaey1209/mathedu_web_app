@@ -125,7 +125,7 @@
     let x = W / 2 - fx * dw + dx, y = H / 2 - fy * dh + dy;
     x = u.clamp(x, W - dw, 0); y = u.clamp(y, H - dh, 0);
     ctx.save(); ctx.globalAlpha *= alpha; if (rot) { ctx.translate(W / 2, H / 2); ctx.rotate(rot); ctx.translate(-W / 2, -H / 2); }
-    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high'; ctx.drawImage(im, x, y, dw, dh); ctx.restore();
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high'; const src = (A.livePlate && A.livePlate(id, A.api.T)) || im; ctx.drawImage(src, x, y, dw, dh); ctx.restore();
     return { x, y, w: dw, h: dh, s: cover };
   };
   // Ken Burns: interpolate {zoom,fx,fy,dx,dy} between a and b over [t0,t1] with easing; returns the plate opts
@@ -404,7 +404,7 @@
   }
 
   /* --------------------------------------------------------------- loop */
-  let last = 0, acc = 0, lastRendered = -1;
+  let last = 0, acc = 0, lastRendered = -1, lastWall = 0;
   function loop(now) {
     requestAnimationFrame(loop);
     const dt = Math.min(0.1, (now - last) / 1000 || 0); last = now;
@@ -412,7 +412,9 @@
     const s = A.sceneAt(A.time); if (s) { const m = typeof s.mood === 'function' ? s.mood(A.time - s.start) : (s.mood || 'ancient'); if (m !== snd.mood) snd.setMood(m); }
     snd.tick(A.time, dt); tts.tick(A.time);
     const fidx = Math.floor(A.time * A.fps);
-    if (fidx !== lastRendered || !A.playing && A._dirty) { lastRendered = fidx; A._dirty = false; renderFrame(A.time, 1 / A.fps); }
+    if (fidx !== lastRendered || !A.playing && A._dirty) { lastRendered = fidx; A._dirty = false; renderFrame(A.time, 1 / A.fps);
+      // wall-clock interval between rendered frames feeds the living-plate quality governor
+      if (A.playing && A.motionPerf) { if (lastWall) A.motionPerf((now - lastWall) / 1000); lastWall = now; } else lastWall = 0; }
     ui && ui.tick();
   }
   A.play = () => { if (!A.started) return A.begin(); if (A.time >= A.dur) A.time = 0; A.playing = true; snd.start(); snd.setMood(snd.mood, true); ui && ui.sync(); };

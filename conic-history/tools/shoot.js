@@ -9,7 +9,7 @@ const args = process.argv.slice(2); const get = (k, d) => { const i = args.index
 const root = path.join(__dirname, '..'); const file = get('file', 'dev.html'); const out = get('out', 'shots/out'); const scale = parseFloat(get('scale', '0.5'));
 fs.mkdirSync(path.join(root, out), { recursive: true });
 (async () => {
-  const browser = await chromium.launch({ args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required'] });
+  const browser = await chromium.launch({ args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
   const page = await browser.newPage({ viewport: { width: Math.round(1920 * scale), height: Math.round(1080 * scale) }, deviceScaleFactor: 1 });
   const errors = []; page.on('pageerror', e => errors.push('PAGEERROR ' + e.message)); page.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') errors.push(m.type() + ': ' + m.text()); });
   await page.goto('file://' + path.join(root, file)); await page.waitForFunction(() => window.ANIM && ANIM.ready, null, { timeout: 60000 });

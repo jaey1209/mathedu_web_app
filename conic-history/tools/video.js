@@ -10,11 +10,11 @@ const tmp = path.join(root, 'shots', '_frames_' + get('tag', '0')); fs.rmSync(tm
   const p = await b.newPage({ viewport: { width: W, height: Math.round(W * 9 / 16) } });
   const errs = []; p.on('pageerror', e => errs.push(e.message));
   await p.goto('file://' + path.join(root, file)); await p.waitForFunction(() => ANIM.ready, null, { timeout: 90000 });
-  await p.evaluate(() => { ANIM.started = true; document.getElementById('poster').style.display = 'none'; document.getElementById('ctl').style.display = 'none'; });
+  await p.evaluate(() => { ANIM.pause && ANIM.pause(); ANIM.started = true; document.getElementById('poster').style.display = 'none'; document.getElementById('ctl').style.display = 'none'; });
   let n = 0;
-  for (const [a, z] of segs) for (let T = a; T < z; T += 1 / fps) { await p.evaluate(T => ANIM.renderAt(T), T); await p.locator('#cv').screenshot({ path: path.join(tmp, `f${String(n++).padStart(5, '0')}.png`) }); }
+  for (const [a, z] of segs) for (let T = a; T < z - 1e-6; T += 1 / fps) { const d = await p.evaluate(T => { ANIM.renderAt(T); return document.getElementById('cv').toDataURL('image/jpeg', 0.92); }, T); fs.writeFileSync(path.join(tmp, `f${String(n++).padStart(5, '0')}.jpg`), Buffer.from(d.split(',')[1], 'base64')); }
   await b.close();
-  execSync(`ffmpeg -y -loglevel error -framerate ${fps} -i ${tmp}/f%05d.png -c:v libx264 -pix_fmt yuv420p -crf 22 -preset veryfast ${out}`);
+  execSync(`ffmpeg -y -loglevel error -framerate ${fps} -i ${tmp}/f%05d.jpg -vf scale=${W}:-2 -c:v libx264 -pix_fmt yuv420p -crf 22 -preset veryfast ${out}`);
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log('wrote', out, n, 'frames', (fs.statSync(out).size / 1e6).toFixed(1) + ' MB', errs.length ? errs.slice(0, 3) : 'no page errors');
 })().catch(e => { console.error(e); process.exit(1); });

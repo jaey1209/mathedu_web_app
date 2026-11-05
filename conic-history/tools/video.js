@@ -4,7 +4,7 @@ const { chromium } = require('playwright'); const fs = require('fs'), path = req
 const args = process.argv.slice(2); const get = (k, d) => { const i = args.indexOf('--' + k); return i >= 0 ? args[i + 1] : d; };
 const root = path.join(__dirname, '..'); const file = get('file', 'index.html'), fps = +get('fps', '24'), W = +get('w', '960'), out = path.join(root, get('out', 'shots/preview.mp4'));
 const segs = get('segs', '0-5').split(',').map(s => s.split('-').map(Number));
-const tmp = path.join(root, 'shots', '_frames'); fs.rmSync(tmp, { recursive: true, force: true }); fs.mkdirSync(tmp, { recursive: true });
+const tmp = path.join(root, 'shots', '_frames_' + get('tag', '0')); fs.rmSync(tmp, { recursive: true, force: true }); fs.mkdirSync(tmp, { recursive: true });
 (async () => {
   const b = await chromium.launch({ args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
   const p = await b.newPage({ viewport: { width: W, height: Math.round(W * 9 / 16) } });
